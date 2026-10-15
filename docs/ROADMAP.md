@@ -26,17 +26,17 @@ features.
 ## Phase 1 — Reproducible application scaffold and frontend demo
 
 **Priority:** P0
-**Status:** Frontend milestone completed locally; production Docker runtime and
-Linux Docker verification remain pending.
+**Status:** Frontend milestone and Docker production runtime are implemented
+locally; Linux Docker verification is delegated to GitHub Actions.
 
 - Add the TypeScript, React, Vite, and Vitest manifests.
 - Generate and commit the npm lockfile using Node.js 22.
 - Add strict compiler/build/test scripts and the first meaningful offline test.
 - Add the responsive React/Vite public site and BuildMedic Lab workspace.
 - Add frontend validation, demo fixtures, tests, linting, and local preferences.
-- Add a multi-stage Dockerfile and static runtime design. *(Pending.)*
+- Add a multi-stage Dockerfile and static runtime design.
 - Make Linux CI install, test, build, and Docker checks real rather than gated.
-  *(Node checks are active; Docker remains gated.)*
+  *(Node checks are active; Docker runs on Linux CI.)*
 
 **Exit criteria:** Clean Linux and local Node.js setup commands are documented;
 the first real test and production build pass from the lockfile.

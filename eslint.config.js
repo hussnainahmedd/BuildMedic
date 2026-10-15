@@ -29,4 +29,10 @@ export default tseslint.config(
       "react-refresh/only-export-components": "off",
     },
   },
+  {
+    files: ["server.mjs"],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
 );

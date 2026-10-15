@@ -21,29 +21,40 @@ jobs:
           node-version-file: .nvmrc
 
       - name: Install npm dependencies
-        if: ${{ hashFiles('package.json') != '' && hashFiles('package-lock.json') != '' }}
         run: npm ci
 
       - name: Run npm test
-        if: ${{ hashFiles('package.json') != '' && hashFiles('package-lock.json') != '' }}
         run: npm test
 
       - name: Run npm lint
-        if: ${{ hashFiles('package.json') != '' && hashFiles('package-lock.json') != '' }}
         run: npm run lint
 
       - name: Run npm build
-        if: ${{ hashFiles('package.json') != '' && hashFiles('package-lock.json') != '' }}
         run: npm run build
 
-      - name: Report skipped npm checks
-        if: ${{ hashFiles('package.json') == '' || hashFiles('package-lock.json') == '' }}
-        run: echo "::notice::Future npm checks skipped until package.json and package-lock.json are present."
+      - name: Build Docker image
+        run: docker build --pull --file Dockerfile --tag buildmedic:ci .
 
-      - name: Verify Docker build (future)
-        if: ${{ hashFiles('Dockerfile') != '' && hashFiles('package.json') != '' && hashFiles('package-lock.json') != '' }}
-        run: docker build --file Dockerfile --tag buildmedic:ci .
+      - name: Start container and run HTTP smoke check
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --rm --name buildmedic-ci --publish 4173:4173 buildmedic:ci
+          cleanup() {
+            docker logs buildmedic-ci || true
+            docker stop buildmedic-ci >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
 
-      - name: Report skipped Docker check
-        if: ${{ hashFiles('Dockerfile') == '' || hashFiles('package.json') == '' || hashFiles('package-lock.json') == '' }}
-        run: echo "::notice::Future Docker build verification skipped until Dockerfile, package.json, and package-lock.json are present."
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:4173/health; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "Container health check timed out."
+              exit 1
+            fi
+            sleep 2
+          done
+
+          curl --fail --silent --show-error http://127.0.0.1:4173/ | grep --fixed-strings --quiet "BuildMedic"

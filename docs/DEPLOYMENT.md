@@ -1,7 +1,9 @@
 # BuildMedic Deployment
 
-**Status:** Planned deployment guidance. The frontend bundle can be built
-locally; no Docker image or deployment has been verified yet.
+**Status:** The frontend bundle and multi-stage Dockerfile are implemented.
+Docker verification is performed in Linux CI because Docker is unavailable on
+the Windows development machine; the current commit's CI result is the source
+of truth for image verification.
 
 ## 1. Deployment model
 
@@ -13,53 +15,55 @@ Suitable targets may include a static hosting service, an object store behind
 a CDN, or a minimal Linux web server. The final target will be selected after
 the first production build exists.
 
-## 2. Local production workflow (planned)
+## 2. Local production workflow
 
-After the package manifest, lockfile, and scripts are added, the documented
-workflow should be:
+Use the pinned Node.js 22 runtime and committed lockfile:
 
 ```text
 npm ci
 npm run build
-npm run preview
+npm run start
 ```
 
-The exact script names must match `package.json`. A production build must be
-served from the generated output rather than the Vite development server. Do
-not treat a development server as deployment verification.
+The production server listens on `0.0.0.0:4173` by default and serves the
+generated `dist/` output with SPA fallback. Verify it locally with:
 
-## 3. Docker workflow (planned)
+```text
+curl --fail http://127.0.0.1:4173/health
+curl --fail http://127.0.0.1:4173/
+```
 
-The future Dockerfile should be multi-stage:
+The development server remains `npm run dev`; it is not production verification.
+
+## 3. Docker workflow
+
+The committed `Dockerfile` is multi-stage:
 
 1. Use a pinned Node.js 22 build image.
 2. Copy only manifests first and install with `npm ci`.
 3. Copy source, run the production build, and discard build-time dependencies.
 4. Serve only the static output from a minimal runtime image.
-5. Run as a non-root user, expose only the documented port, and define a
-   health/readiness behavior appropriate for a static site.
+5. Run as a non-root user, expose port `4173`, and define a health check for
+   `/health`.
 
 Docker is unavailable on the Windows development laptop, so no local Docker
-build or run result should be reported. GitHub Actions will perform the image
-build on an Ubuntu runner once `Dockerfile`, package manifests, lockfile, and
-build scripts exist.
+build or run result is claimed. GitHub Actions performs the image build and
+container smoke test on an Ubuntu runner.
 
 ## 4. Linux CI verification
 
-The repository workflow at `.github/workflows/ci.yml` runs the available Node.js
-checks now and keeps Docker verification gated until the production image
-artifacts exist. It is intended to:
+The repository workflow at `.github/workflows/ci.yml` performs the complete
+Linux verification flow:
 
 - check out the repository;
 - select Node.js 22 using `.nvmrc`;
 - install exactly from `package-lock.json` with `npm ci`;
-- run the offline test and production-build scripts; and
-- run `docker build` on the Linux runner.
+- run test, lint, and production-build scripts; and
+- build the Docker image, start it, check `/health`, and smoke-test `/`.
 
-The workflow now runs the Node.js checks because the package manifest, lockfile,
-and scripts exist. It still skips Docker verification until a Dockerfile and
-production runtime are added. Record the actual CI run URL or status in release
-notes; local setup must never claim that CI passed.
+Missing manifests, scripts, Dockerfile, image startup, health responses, or
+homepage content fail the workflow. Record the actual CI run URL or status in
+release notes; local setup must never claim that CI passed.
 
 ## 5. Configuration and secrets
 

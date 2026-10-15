@@ -14,11 +14,13 @@ interactions, evidence viewer, simulated verification, settings, reports, and
 help surfaces. Demo content is explicitly labeled.
 
 The real diagnostic engine, backend services, authentication, external AI
-integrations, persistence, and Docker image are not implemented in this phase.
+integrations, and persistence are not implemented in this phase. A multi-stage
+Dockerfile and built-in static production server are now included; Docker is
+verified in Linux CI because it is unavailable on the Windows development
+machine.
 
-Verified locally with Node.js 22: typecheck, lint, 17 Vitest tests, and the
-production build. Docker remains unverified because it is unavailable on the
-Windows development machine.
+Verified locally with Node.js 22: lockfile installation, typecheck, lint, 18
+Vitest tests, and the production build. Docker is not run locally.
 
 ## Planned features
 
@@ -103,10 +105,21 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run start
 ```
 
 The Vite development server is the recommended way to preview the frontend.
-All listed checks are local Node.js commands; no Docker installation is needed.
+For a production-style local run, execute `npm run build` followed by
+`npm run start` and open `http://127.0.0.1:4173`. The `/health` endpoint returns
+the server readiness status. `npm test` is the single offline test command and
+does not make network requests.
+
+## Environment
+
+The offline-first MVP has no required environment variables. `.env.example`
+documents this explicitly. Optional `HOST` and `PORT` process variables are
+available to the production static server; do not put secrets in client-visible
+Vite variables.
 
 ## Roadmap
 
@@ -116,31 +129,31 @@ exit criteria, and explicitly deferred opportunities.
 ## Future local, Docker, and CI setup
 
 Local frontend commands are available and verified as described above. Docker
-image verification remains planned/unverified; Linux CI Node checks are active.
+image verification is delegated to Linux CI.
 
-### Local development (planned)
+### Local development
 
 1. Select Node.js 22 using `.nvmrc`.
 2. Install dependencies with `npm ci`.
 3. Start the Vite development server with `npm run dev`.
 4. Run `npm run typecheck`, `npm run lint`, `npm test`, and `npm run build`.
 
-### Docker (planned)
+### Docker
 
-A future multi-stage `Dockerfile` will pin a Node.js 22 base image, install from
-the committed lockfile, build the application, and define a minimal production
-runtime. Docker is unavailable on the local Windows machine; Linux CI will
-verify the image after the implementation artifacts exist. See
+`Dockerfile` is a multi-stage Node.js 22 build/runtime image. It installs from
+the committed lockfile, builds the Vite output, runs the static server as a
+non-root user, exposes port `4173`, and includes a container health check.
+Docker is unavailable on the local Windows machine; Linux CI builds the image,
+starts it, checks `/health`, and smoke-tests the rendered homepage. See
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ### CI
 
 The repository contains a Linux CI workflow at
-`.github/workflows/ci.yml`. It targets a Linux runner with Node.js 22 and will
-install from the lockfile, run test/lint/build scripts, and verify the Docker
-image once a Dockerfile exists. The Node checks passed on GitHub Actions for
-the frontend commit; Docker verification remains skipped until that artifact
-exists.
+`.github/workflows/ci.yml`. It targets a Linux runner with Node.js 22, installs
+from the lockfile, runs test/lint/build scripts, builds the Docker image, starts
+the container, checks `/health`, and smoke-tests the homepage. Any missing file
+or failing command fails the workflow.
 
 ### Deployment (planned)
 

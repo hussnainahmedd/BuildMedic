@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+dist
+coverage
+.vite
+.cache
+*.log
+.env
+.env.*
+!.env.example
+Dockerfile*
+README.md
+docs
+tests
