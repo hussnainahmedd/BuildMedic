@@ -24,6 +24,8 @@ export interface FindingEvidence {
   readonly lineNumber: number;
   readonly text: string;
   readonly role?: "primary" | "context";
+  /** True when one or more sensitive values were replaced in the displayed line. */
+  readonly redacted?: boolean;
 }
 
 export interface SuggestedAction {
@@ -37,6 +39,8 @@ export interface Finding {
   readonly id: string;
   /** Stable rule/signature identity used by verification comparisons. */
   readonly ruleId: string;
+  /** Stable, more-specific identity used to consolidate repeated diagnostics. */
+  readonly signature?: string;
   readonly category: FindingCategory;
   readonly severity: FindingSeverity;
   readonly confidence: FindingConfidence;
