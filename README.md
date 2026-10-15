@@ -116,7 +116,7 @@ exit criteria, and explicitly deferred opportunities.
 ## Future local, Docker, and CI setup
 
 Local frontend commands are available and verified as described above. Docker
-and Linux CI image verification remain planned/unverified.
+image verification remains planned/unverified; Linux CI Node checks are active.
 
 ### Local development (planned)
 
@@ -133,13 +133,14 @@ runtime. Docker is unavailable on the local Windows machine; Linux CI will
 verify the image after the implementation artifacts exist. See
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
-### CI (planned)
+### CI
 
 The repository contains a Linux CI workflow at
 `.github/workflows/ci.yml`. It targets a Linux runner with Node.js 22 and will
-install from the lockfile, run the project test/build scripts, and verify the
-Docker image once a Dockerfile exists. Current local checks do not claim Docker
-or GitHub Actions success.
+install from the lockfile, run test/lint/build scripts, and verify the Docker
+image once a Dockerfile exists. The Node checks passed on GitHub Actions for
+the frontend commit; Docker verification remains skipped until that artifact
+exists.
 
 ### Deployment (planned)
 
