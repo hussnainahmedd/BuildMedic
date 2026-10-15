@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { NewAnalysisPage, type WorkspacePageProps } from "../../src/pages/workspace";
+import { NewAnalysisPage, VerificationPage, type WorkspacePageProps } from "../../src/pages/workspace";
 import { DEMO_ANALYSIS, DEMO_NODE_BUILD_LOG } from "../../src/data";
 import { DEFAULT_USER_PREFERENCES } from "../../src/types/preferences";
 
@@ -20,6 +20,23 @@ function renderInput(overrides: Partial<WorkspacePageProps> = {}) {
   };
 
   return { ...render(<NewAnalysisPage {...props} />), props };
+}
+
+function renderVerification(overrides: Partial<WorkspacePageProps> = {}) {
+  const props: WorkspacePageProps = {
+    analysis: DEMO_ANALYSIS,
+    currentLog: DEMO_NODE_BUILD_LOG.text,
+    onAnalyze: vi.fn(),
+    onNavigate: vi.fn(),
+    onNotify: vi.fn(),
+    onPatchPreferences: vi.fn(),
+    onSetTheme: vi.fn(),
+    preferences: DEFAULT_USER_PREFERENCES,
+    theme: DEFAULT_USER_PREFERENCES.theme,
+    ...overrides,
+  };
+
+  return { ...render(<VerificationPage {...props} />), props };
 }
 
 describe("new analysis frontend flow", () => {
@@ -46,5 +63,14 @@ describe("new analysis frontend flow", () => {
     expect(onAnalyze).not.toHaveBeenCalled();
     expect(onNotify).toHaveBeenCalledWith("Paste a build log to analyze.");
     expect(screen.getByRole("alert")).toHaveTextContent("Paste a build log to analyze.");
+  });
+
+  it("renders the simulated verification result after comparing both logs", () => {
+    renderVerification();
+
+    fireEvent.click(screen.getByRole("button", { name: "Compare demo result" }));
+
+    expect(screen.getByText("The rerun moved in the right direction.")).toBeInTheDocument();
+    expect(screen.getByText("resolved")).toBeInTheDocument();
   });
 });
