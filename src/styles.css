@@ -646,6 +646,20 @@ kbd,
   font-size: 0.64rem;
 }
 
+.analysis-partial-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--amber) 28%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--amber) 7%, var(--surface));
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 0.63rem;
+  line-height: 1.5;
+}
+
 .empty-state {
   display: grid;
   min-height: 260px;
@@ -4100,6 +4114,7 @@ kbd,
 }
 
 .log-viewer-meta {
+  display: flex;
   justify-content: space-between;
   padding: 9px 18px;
   border-bottom: 1px solid var(--line);
@@ -4140,6 +4155,15 @@ kbd,
 .log-code-line.is-error {
   background: color-mix(in srgb, var(--red) 4%, transparent);
   color: var(--red);
+}
+
+.log-code-line.is-evidence {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.log-code-line.no-line-number {
+  display: block;
+  padding-left: 20px;
 }
 
 .log-code-line code {

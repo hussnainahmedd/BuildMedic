@@ -2,8 +2,9 @@
 
 BuildMedic is an open-source developer-tool project. Contributions should make
 diagnostics safer, clearer, more reproducible, or easier to validate. The
-current repository contains documentation and structure only; implementation
-conventions below apply when the application scaffold is introduced.
+repository contains a working local MVP. Contributions should keep the domain
+engine independent from React and preserve the documented safety and
+reproducibility boundaries.
 
 ## 1. Before starting
 

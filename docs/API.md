@@ -14,16 +14,17 @@ The browser's internal modules are interfaces in the software-design sense,
 not public APIs. They should exchange typed, serializable values and remain
 independent from React where practical.
 
-## 2. Justified future internal interfaces
+## 2. Implemented internal interfaces
 
-The following conceptual interfaces may be introduced when implementation
-begins. Exact names and fields must be decided in source types and tests.
+The browser-facing domain modules expose these pure, serializable interfaces.
+Exact TypeScript contracts and options live in `src/types/` and the referenced
+source modules:
 
 ```text
-normalize(inputText, policy) -> NormalizedLog | ValidationFailure
-analyze(normalizedLog, ruleCatalog) -> AnalysisResult
-verify(baselineResult, rerunResult) -> VerificationResult
-redact(text, redactionPolicy) -> RedactedText
+normalizeLogText(inputText) -> NormalizedLog
+analyzeLog(input, options?) -> AnalysisResult
+compareAnalysisResults(baselineResult, rerunResult, options?) -> VerificationResult
+redactSensitiveLog(text) -> RedactedText
 ```
 
 Required properties:
@@ -50,4 +51,5 @@ the future design would need to specify:
 - whether an AI provider is optional, isolated, and disclosed.
 
 No URL, endpoint, token, or server contract should be inferred from this
-document.
+document. The optional static production server only serves the built browser
+assets and `/health`; it is not an analysis API.

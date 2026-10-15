@@ -48,8 +48,8 @@ export interface ComparedVerificationResult extends VerificationResultBase {
 
 export interface NoMatchVerificationResult extends VerificationResultBase {
   readonly status: "no-match";
-  readonly outcome: "no-change";
-  readonly comparisons: readonly [];
+  readonly outcome: VerificationOutcome;
+  readonly comparisons: readonly FindingComparison[];
   readonly summary: VerificationSummary;
   readonly message: string;
 }

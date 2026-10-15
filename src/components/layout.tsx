@@ -186,8 +186,8 @@ const workspaceGroups: { label: string; items: WorkspaceNavItem[] }[] = [
   {
     label: "Library",
     items: [
-      { label: "History", description: "Local demo history", href: "/app/history", icon: "history" },
-      { label: "Reports", description: "Shareable preview", href: "/app/reports", icon: "file-text" },
+      { label: "History", description: "Local metadata", href: "/app/history", icon: "history" },
+      { label: "Reports", description: "Sanitized text export", href: "/app/reports", icon: "file-text" },
     ],
   },
   {

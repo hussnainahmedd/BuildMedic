@@ -15,18 +15,23 @@ export interface RedactedText {
   readonly redacted: boolean;
 }
 
-const PRIVATE_KEY_PATTERN = /-----BEGIN [^-\r\n]{1,80}PRIVATE KEY-----[^\r\n]*/gi;
+const PRIVATE_KEY_BLOCK_PATTERN = /-----BEGIN [^-\r\n]{1,80}PRIVATE KEY-----[\s\S]{0,65536}?-----END [^-\r\n]{1,80}PRIVATE KEY-----/gi;
+const PRIVATE_KEY_HEADER_PATTERN = /-----BEGIN [^-\r\n]{1,80}PRIVATE KEY-----[^\r\n]*/gi;
 const BEARER_PATTERN = /\bBearer\s+[-A-Za-z0-9._~+/=]{6,512}/gi;
 const BASIC_AUTH_PATTERN = /\bBasic\s+[A-Za-z0-9+/=]{8,512}/gi;
 const URL_CREDENTIAL_PATTERN = /(\bhttps?:\/\/)[^/\s:@]{1,128}:[^@\s]{1,512}@/gi;
 const QUOTED_SECRET_PATTERN =
-  /\b(_auth(?:[_-]?token)?|_password|_secret|_token|api[_-]?key|access[_-]?(?:key|token)|auth(?:[_-]?(?:key|token)|orization)?|client[_-]?secret|password|passwd|private[_-]?key|secret|token)\b(\s*[:=]\s*)(["'])[^"'\r\n]{1,2048}\3/gi;
+  /\b(?:[A-Za-z][A-Za-z0-9]*[_-])?(_?auth(?:[_-]?token)?|_?password|_?secret|_?token|api[_-]?key|access[_-]?(?:key|token)|auth(?:[_-]?(?:key|token)|orization)?|client[_-]?secret|password|passwd|private[_-]?key|secret|token)\b(\s*[:=]\s*)(["'])[^"'\r\n]{1,2048}\3/gi;
 const AUTH_VALUE_PATTERN =
-  /\b(?:_auth(?:[_-]?token)?|authorization|auth|auth[_-]?key|auth[_-]?token|access[_-]?key|access[_-]?token)\b\s*[:=]\s*(?:Bearer|Basic)?\s*[^\r\n]{1,2048}/gi;
+  /\b(?:[A-Za-z][A-Za-z0-9]*[_-])?(?:_?auth(?:[_-]?token)?|authorization|auth|auth[_-]?key|auth[_-]?token|access[_-]?key|access[_-]?token)\b\s*[:=]\s*(?:Bearer|Basic)?\s*[^\r\n]{1,2048}/gi;
 const KEY_VALUE_SECRET_PATTERN =
-  /\b(?:_auth(?:[_-]?token)?|_password|_secret|_token|api[_-]?key|access[_-]?(?:key|token)|auth(?:[_-]?(?:key|token)|orization)?|client[_-]?secret|password|passwd|private[_-]?key|secret|token)\b(\s*[:=]\s*)(["']?)([^\s"',;]{1,2048})\2/gi;
+  /\b(?:[A-Za-z][A-Za-z0-9]*[_-])?(?:_?auth(?:[_-]?token)?|_?password|_?secret|_?token|api[_-]?key|access[_-]?(?:key|token)|auth(?:[_-]?(?:key|token)|orization)?|client[_-]?secret|password|passwd|private[_-]?key|secret|token)\b(\s*[:=]\s*)(["']?)([^\s"',;]{1,2048})\2/gi;
+const ENV_SECRET_PATTERN =
+  /\b(?:[A-Z][A-Z0-9]*_)?(?:TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|AUTH(?:[_-]?TOKEN)?|ACCESS[_-]?(?:KEY|TOKEN)|PRIVATE[_-]?KEY)\b(\s*=\s*)([^\s,;]{1,2048})/g;
 const QUERY_SECRET_PATTERN =
-  /([?&](?:access_token|api[_-]?key|auth(?:orization)?|password|secret|token)=)[^&\s]{1,2048}/gi;
+  /([?&](?:access_token|api[_-]?key|auth(?:orization)?|client[_-]?secret|password|passwd|secret|token)=)[^&\s]{1,2048}/gi;
+const JSON_SECRET_PATTERN =
+  /(["'])(?:[A-Za-z][A-Za-z0-9]*[_-])?(?:_?auth(?:[_-]?token)?|_?password|_?secret|_?token|api[_-]?key|access[_-]?(?:key|token)|auth(?:[_-]?(?:key|token)|orization)?|client[_-]?secret|password|passwd|private[_-]?key|secret|token)\1(\s*:\s*)(["'])[^"'\r\n]{1,2048}\3/gi;
 const KNOWN_TOKEN_PATTERN =
   /\b(?:gh[pousr]_[A-Za-z0-9_-]{8,256}|npm_[A-Za-z0-9]{8,256}|xox[baprs]-[A-Za-z0-9-]{8,256}|sk-[A-Za-z0-9_-]{8,256}|AIza[0-9A-Za-z_-]{20,256}|AKIA[0-9A-Z]{16})\b/g;
 
@@ -105,21 +110,26 @@ export function redactSensitiveText(value: string): RedactedText {
   let text = value;
   let redacted = false;
 
-  const replace = (pattern: RegExp, replacement: string): void => {
-    const next = text.replace(pattern, replacement);
+  const replace = (pattern: RegExp, replacement: string | ((substring: string) => string)): void => {
+    const next = typeof replacement === "string"
+      ? text.replace(pattern, replacement)
+      : text.replace(pattern, (substring) => replacement(substring));
     if (next !== text) {
       redacted = true;
       text = next;
     }
   };
 
-  replace(PRIVATE_KEY_PATTERN, "[REDACTED PRIVATE KEY]");
+  replace(PRIVATE_KEY_BLOCK_PATTERN, (match) => `[REDACTED PRIVATE KEY]${match.match(/\r\n|\r|\n/g)?.join("") ?? ""}`);
+  replace(PRIVATE_KEY_HEADER_PATTERN, "[REDACTED PRIVATE KEY]");
   replace(URL_CREDENTIAL_PATTERN, "$1[REDACTED CREDENTIAL]@");
   replace(BEARER_PATTERN, "Bearer [REDACTED TOKEN]");
   replace(BASIC_AUTH_PATTERN, "Basic [REDACTED CREDENTIAL]");
   replace(QUOTED_SECRET_PATTERN, "$1$2[REDACTED SECRET]");
+  replace(JSON_SECRET_PATTERN, "$1secret$1$2$3[REDACTED SECRET]$3");
   replace(AUTH_VALUE_PATTERN, "[REDACTED AUTH]");
   replace(KEY_VALUE_SECRET_PATTERN, "$1[REDACTED SECRET]");
+  replace(ENV_SECRET_PATTERN, "$1[REDACTED SECRET]");
   replace(QUERY_SECRET_PATTERN, "$1[REDACTED SECRET]");
   replace(KNOWN_TOKEN_PATTERN, "[REDACTED TOKEN]");
 
@@ -127,6 +137,17 @@ export function redactSensitiveText(value: string): RedactedText {
 }
 
 export const redactText = redactSensitiveText;
+
+/**
+ * Redacts an entire log in one bounded pass while retaining every newline
+ * separator. This is intended for reports/copy actions; matching continues to
+ * use the original normalized text and never this display-safe value.
+ */
+export function redactSensitiveLog(value: string): RedactedText {
+  return redactSensitiveText(value);
+}
+
+export const redactWholeLog = redactSensitiveLog;
 
 /** Returns a display-safe line, bounded for evidence rendering. */
 export function sanitizeEvidenceLine(value: string, maxCharacters = 512): RedactedText {

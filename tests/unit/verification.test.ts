@@ -88,7 +88,7 @@ describe("compareAnalysisResults", () => {
     });
     expect(result.comparisons).toHaveLength(1);
     expect(result.comparisons[0]).toMatchObject({
-      findingKey: "typescript/assignment",
+      findingKey: "typescript/assignment|legacy:error ts2322:assignment mismatch",
       state: "resolved",
       baselineFindingId: "baseline-1",
     });
@@ -141,10 +141,10 @@ describe("compareAnalysisResults", () => {
       summary: { resolvedCount: 2, persistentCount: 1, newCount: 1, uncertainCount: 0 },
     });
     expect(result.comparisons.map((comparison) => [comparison.findingKey, comparison.state])).toEqual([
-      ["a-rule", "resolved"],
-      ["n-rule", "new"],
-      ["p-rule", "persistent"],
-      ["z-rule", "resolved"],
+      ["a-rule|legacy:a signal", "resolved"],
+      ["n-rule|legacy:n signal", "new"],
+      ["p-rule|legacy:p signal", "persistent"],
+      ["z-rule|legacy:z signal", "resolved"],
     ]);
   });
 
@@ -177,10 +177,10 @@ describe("compareAnalysisResults", () => {
       makeComplete("after", [rerunFinding]),
     );
 
-    expect(getFindingKey(baselineFinding)).toBe("typescript/ts2322");
+    expect(getFindingKey(baselineFinding)).toBe("typescript/ts2322|legacy:error ts2322:assignment mismatch");
     expect(result.summary).toMatchObject({ persistentCount: 1, resolvedCount: 0, newCount: 0, uncertainCount: 0 });
     expect(result.comparisons[0]).toMatchObject({
-      findingKey: "typescript/ts2322",
+      findingKey: "typescript/ts2322|legacy:error ts2322:assignment mismatch",
       state: "persistent",
       baselineFindingId: "generated-before",
       rerunFindingId: "generated-after",
@@ -235,7 +235,6 @@ describe("compareAnalysisResults", () => {
     expect(result).toMatchObject({
       status: "compared",
       outcome: "no-change",
-      comparisons: [],
       summary: { resolvedCount: 0, persistentCount: 0, newCount: 0, uncertainCount: 0 },
     });
     expect(result.message?.toLowerCase()).not.toMatch(/pass|success|fail/);
@@ -277,12 +276,12 @@ describe("compareAnalysisResults", () => {
 
     expect(result).toMatchObject({
       status: "no-match",
-      outcome: "no-change",
-      comparisons: [],
-      summary: { resolvedCount: 0, persistentCount: 0, newCount: 0, uncertainCount: 0 },
+      outcome: "uncertain",
+      summary: { resolvedCount: 0, persistentCount: 0, newCount: 0, uncertainCount: 1 },
     });
     expect(result.message).toContain("uncertain");
     expect(result.message).not.toContain("resolved");
+    expect(result.comparisons[0]).toMatchObject({ state: "uncertain", baselineFindingId: "finding-default" });
   });
 
   it("bounds returned rows while retaining deterministic summary counts", () => {

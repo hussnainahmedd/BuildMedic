@@ -16,6 +16,13 @@ export interface ValidationError {
   readonly actualBytes?: number;
   readonly limitBytes?: number;
   readonly mimeType?: string;
+  /** Counts may be lower bounds when scanning stops at an input limit. */
+  readonly actualBytesIsLowerBound?: boolean;
+  readonly actualLines?: number;
+  readonly limitLines?: number;
+  readonly lineNumber?: number;
+  readonly actualLineLength?: number;
+  readonly limitLineLength?: number;
 }
 
 export interface ValidationPolicy {
@@ -23,6 +30,10 @@ export interface ValidationPolicy {
   readonly warningBytes: number;
   /** The hard byte limit shared by pasted text and selected files. */
   readonly maxBytes: number;
+  readonly maxLines?: number;
+  /** Maximum UTF-16 characters on one source line, before any regex work. */
+  readonly maxLineLength?: number;
+  readonly maxCharacters?: number;
   /** MIME patterns accepted for a selected text file. */
   readonly acceptedMimeTypes: readonly string[];
 }

@@ -7,6 +7,7 @@ export const FINDING_CATEGORIES = [
   "network",
   "native-module",
   "memory",
+  "tooling",
   "unknown",
 ] as const;
 

@@ -1,7 +1,7 @@
 import {
-  formatByteLimit,
+  DEFAULT_VALIDATION_POLICY,
   getUtf8ByteLength,
-  VALIDATION_MESSAGES,
+  inspectLogText,
 } from "../lib/validation";
 import type {
   AnalysisInputSummary,
@@ -11,12 +11,13 @@ import type {
   InvalidAnalysisResult,
   ValidationError,
 } from "../types";
-import { analyzeDiagnostics } from "../diagnostics";
+import { analyzeDiagnosticsDetailed } from "../diagnostics";
 import { RULE_CATALOG_VERSION } from "../diagnostics/rules";
 
 import {
   DEFAULT_CONTEXT_LINES,
   DEFAULT_MAX_ANALYZED_BYTES,
+  DEFAULT_MAX_ANALYZED_LINE_LENGTH,
   DEFAULT_MAX_ANALYZED_LINES,
   DEFAULT_MAX_EVIDENCE_LINE_LENGTH,
   DEFAULT_MAX_EVIDENCE_LINES,
@@ -24,6 +25,7 @@ import {
   DEFAULT_MAX_MATCHES_PER_RULE,
   HARD_MAX_ANALYZED_BYTES,
   HARD_MAX_ANALYZED_LINES,
+  HARD_MAX_ANALYZED_LINE_LENGTH,
   HARD_MAX_CONTEXT_LINES,
   HARD_MAX_EVIDENCE_LINE_LENGTH,
   HARD_MAX_EVIDENCE_LINES,
@@ -32,7 +34,7 @@ import {
   type AnalyzeOptions,
   type AnalyzeRequest,
 } from "./types";
-import { normalizeLogText } from "./normalize";
+import { normalizeLogText, redactSensitiveLog, sanitizeEvidenceLine } from "./normalize";
 
 const DETERMINISTIC_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 const MAX_FILE_NAME_LENGTH = 160;
@@ -63,27 +65,9 @@ function resolveFileName(value: unknown): string | undefined {
     return undefined;
   }
 
-  return value.slice(0, MAX_FILE_NAME_LENGTH);
-}
-
-function lineCount(value: string): number {
-  if (value.length === 0) {
-    return 0;
-  }
-
-  let count = 1;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code === 0x0a) {
-      count += 1;
-    } else if (code === 0x0d) {
-      count += 1;
-      if (value.charCodeAt(index + 1) === 0x0a) {
-        index += 1;
-      }
-    }
-  }
-  return count;
+  const basename = value.split(/[\\/]/).pop() ?? value;
+  const safe = sanitizeEvidenceLine(basename, MAX_FILE_NAME_LENGTH).text;
+  return safe.length > 0 ? safe : undefined;
 }
 
 function createInputSummary(
@@ -91,13 +75,15 @@ function createInputSummary(
   source: AnalysisSource,
   fileName: string | undefined,
   normalizedNewlines: boolean,
+  counts: { readonly byteCount?: number; readonly lineCount?: number; readonly partial?: boolean } = {},
 ): AnalysisInputSummary {
   return {
     source,
     ...(fileName === undefined ? {} : { fileName }),
-    byteCount: getUtf8ByteLength(text),
-    lineCount: lineCount(text),
+    byteCount: counts.byteCount ?? getUtf8ByteLength(text),
+    lineCount: counts.lineCount ?? 0,
     normalizedNewlines,
+    ...(counts.partial ? { countsArePartial: true } : {}),
   };
 }
 
@@ -125,6 +111,7 @@ function createInvalidResult(
   fileName: string | undefined,
   error: ValidationError,
   options: AnalyzeOptions,
+  counts?: { readonly byteCount?: number; readonly lineCount?: number; readonly normalizedNewlines?: boolean; readonly partial?: boolean },
 ): InvalidAnalysisResult {
   const boundedSample = text.length <= MAX_INVALID_ID_SAMPLE_LENGTH * 2
     ? text
@@ -133,7 +120,7 @@ function createInvalidResult(
   return {
     id: createId("analysis", seed, options.idFactory),
     analyzedAt: createTimestamp(options.timestampFactory),
-    input: createInputSummary(text, source, fileName, text.includes("\r")),
+    input: createInputSummary(text, source, fileName, counts?.normalizedNewlines ?? text.includes("\r"), counts),
     ruleCatalogVersion: options.ruleCatalogVersion ?? options.catalogVersion ?? RULE_CATALOG_VERSION,
     status: "invalid",
     findings: [],
@@ -141,65 +128,56 @@ function createInvalidResult(
   };
 }
 
-function createTooLargeError(actualBytes: number, limitBytes: number): ValidationError {
-  return {
-    field: "log",
-    code: "too-large",
-    message: VALIDATION_MESSAGES.tooLargeLog(formatByteLimit(limitBytes)),
-    actualBytes,
-    limitBytes,
-  };
+const BUILD_COMPLETION_PATTERN = /(?:\b(?:build|compile|compilation|bundle|bundling|test suite|tests?)\b[^\n]{0,120}\b(?:completed?|succeed(?:ed|s)?|passed|finished)\b|\b(?:completed?|succeed(?:ed|s)?|passed|finished)\b[^\n]{0,120}\b(?:build|compile|compilation|bundle|tests?)\b|\b(?:webpack|vite|tsc)\b[^\n]{0,120}\b(?:compiled|built)\s+successfully\b|\b(?:exit|status|code)\s*[:=]?\s*0\b)/i;
+
+function findBuildCompletion(lines: readonly string[]): { readonly lineNumber: number; readonly text: string } | undefined {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (BUILD_COMPLETION_PATTERN.test(line)) {
+      return { lineNumber: index + 1, text: sanitizeEvidenceLine(line, 512).text };
+    }
+  }
+  return undefined;
 }
 
 function analyzeTextInternal(text: unknown, options: AnalyzeOptions): AnalysisResult {
   const source = resolveSource(options.source, "paste");
   const fileName = resolveFileName(options.fileName);
-
-  if (text === null || text === undefined || (typeof text === "string" && text.trim().length === 0)) {
+  const maxBytes = positiveLimit(options.maxInputBytes, DEFAULT_MAX_ANALYZED_BYTES, HARD_MAX_ANALYZED_BYTES);
+  const maxLines = positiveLimit(options.maxInputLines, DEFAULT_MAX_ANALYZED_LINES, HARD_MAX_ANALYZED_LINES);
+  const maxLineLength = positiveLimit(options.maxInputLineLength, DEFAULT_MAX_ANALYZED_LINE_LENGTH, HARD_MAX_ANALYZED_LINE_LENGTH);
+  const maxCharacters = positiveLimit(options.maxInputCharacters, HARD_MAX_ANALYZED_BYTES, HARD_MAX_ANALYZED_BYTES);
+  const inspection = inspectLogText(text, {
+    ...DEFAULT_VALIDATION_POLICY,
+    maxBytes,
+    maxLines,
+    maxLineLength,
+    maxCharacters,
+  });
+  if (!inspection.validation.valid) {
     return createInvalidResult(
       typeof text === "string" ? text : "",
       source,
       fileName,
-      {
-        field: "log",
-        code: "required",
-        message: VALIDATION_MESSAGES.requiredLog,
-      },
+      inspection.validation.error,
       options,
+      {
+        byteCount: inspection.byteCount,
+        lineCount: inspection.lineCount,
+        normalizedNewlines: inspection.normalizedNewlines,
+        partial: !inspection.complete,
+      },
     );
   }
 
-  if (typeof text !== "string") {
-    return createInvalidResult(
-      "",
-      source,
-      fileName,
-      {
-        field: "log",
-        code: "unreadable",
-        message: VALIDATION_MESSAGES.unreadableInput,
-      },
-      options,
-    );
-  }
-
-  const byteCount = getUtf8ByteLength(text);
-  const maxBytes = positiveLimit(options.maxInputBytes, DEFAULT_MAX_ANALYZED_BYTES, HARD_MAX_ANALYZED_BYTES);
-  const maxCharacters = positiveLimit(options.maxInputCharacters, Number.MAX_SAFE_INTEGER, HARD_MAX_ANALYZED_BYTES);
-  if (byteCount > maxBytes || text.length > maxCharacters) {
-    return createInvalidResult(text, source, fileName, createTooLargeError(byteCount, maxBytes), options);
-  }
-
-  const maxLines = positiveLimit(options.maxInputLines, DEFAULT_MAX_ANALYZED_LINES, HARD_MAX_ANALYZED_LINES);
-  if (lineCount(text) > maxLines) {
-    return createInvalidResult(text, source, fileName, createTooLargeError(byteCount, maxBytes), options);
-  }
-  const normalized = normalizeLogText(text);
+  const validText = inspection.validation.value.text;
+  const normalized = normalizeLogText(validText);
+  const evidenceLines = redactSensitiveLog(normalized.text).text.split("\n");
 
   const ruleCatalogVersion = options.ruleCatalogVersion ?? options.catalogVersion ?? RULE_CATALOG_VERSION;
   const analysisSeed = `${source}|${normalized.text}`;
   const idFactory = (kind: "finding", seed: string): string => createId(kind, seed, options.idFactory);
-  const findings = analyzeDiagnostics(normalized, {
+  const diagnosticAnalysis = analyzeDiagnosticsDetailed({ ...normalized, evidenceLines }, {
     ruleCatalogVersion,
     maxFindings: positiveLimit(options.maxFindings, DEFAULT_MAX_FINDINGS, HARD_MAX_FINDINGS),
     maxEvidenceLines: positiveLimit(options.maxEvidenceLines, DEFAULT_MAX_EVIDENCE_LINES, HARD_MAX_EVIDENCE_LINES),
@@ -208,26 +186,46 @@ function analyzeTextInternal(text: unknown, options: AnalyzeOptions): AnalysisRe
     maxMatchesPerRule: positiveLimit(options.maxMatchesPerRule, DEFAULT_MAX_MATCHES_PER_RULE, HARD_MAX_MATCHES_PER_RULE),
     createId: idFactory,
   });
+  const completion = findBuildCompletion(normalized.matchingLines);
   const base = {
     id: createId("analysis", analysisSeed, options.idFactory),
     analyzedAt: createTimestamp(options.timestampFactory),
-    input: createInputSummary(text, source, fileName, normalized.normalizedNewlines),
+    input: createInputSummary(validText, source, fileName, normalized.normalizedNewlines, {
+      byteCount: inspection.byteCount,
+      lineCount: inspection.lineCount,
+    }),
     ruleCatalogVersion,
   } as const;
 
+  const findings = diagnosticAnalysis.findings;
+  const limitsReached = diagnosticAnalysis.limitsReached;
+  const partial = limitsReached.length > 0 || diagnosticAnalysis.evidenceTruncated;
+  const metadata = {
+    partial,
+    limitsReached,
+    ...(diagnosticAnalysis.omittedFindingCount === undefined ? {} : { omittedFindingCount: diagnosticAnalysis.omittedFindingCount }),
+    ...(diagnosticAnalysis.cappedRuleIds.length === 0 ? {} : { cappedRuleIds: diagnosticAnalysis.cappedRuleIds }),
+    ...(diagnosticAnalysis.evidenceTruncated ? { evidenceTruncated: true } : {}),
+    ...(completion === undefined ? {} : { buildCompletion: completion }),
+  } as const;
+  const resultBase = { ...base, metadata };
+
   if (findings.length === 0) {
     return {
-      ...base,
+      ...resultBase,
       status: "no-match",
       findings: [],
-      message: "No supported diagnostic matched this log.",
+      message: partial
+        ? "No supported diagnostic matched within the bounded analysis; the result may be incomplete."
+        : "No supported diagnostic matched this log.",
     };
   }
 
   return {
-    ...base,
+    ...resultBase,
     status: "complete",
     findings,
+    ...(partial ? { message: "Analysis was capped by a safety limit; findings are not exhaustive." } : {}),
   };
 }
 

@@ -1,7 +1,9 @@
 # BuildMedic Security
 
-**Status:** Proposed controls for the MVP; implementation and security review
-are still pending.
+**Status:** Core local-MVP controls are implemented and covered by regression
+tests. Pattern-based redaction, browser behavior, dependency supply-chain
+review, and deployment configuration still need a broader release security
+review.
 
 ## 1. Security objectives
 
@@ -40,11 +42,13 @@ are still pending.
 
 ## 4. Input validation and sanitization
 
-The input boundary should validate before normalization or rule evaluation:
+The implemented input boundary validates before normalization or rule evaluation:
 
 - accept text content and known text-file selections only;
-- reject empty/whitespace-only input;
-- enforce a documented byte limit and a sensible line-count limit;
+- reject empty/whitespace-only, binary-looking, oversized, and overlong-line
+  input;
+- enforce documented byte, line-count, line-length, finding, match, and evidence
+  limits;
 - decode as text without evaluating file content;
 - normalize newlines while retaining line numbers;
 - replace or visibly mark control characters that could confuse the UI;
@@ -52,9 +56,9 @@ The input boundary should validate before normalization or rule evaluation:
 - treat all extracted package names, paths, URLs, and commands as data.
 
 Sanitization is a presentation and sharing control, not a guarantee that a log
-is safe to disclose. The UI should make it clear when evidence has been masked
-and should provide a way to clear the active session. Raw log text should not
-be persisted by default.
+is safe to disclose. The UI marks bounded/uncertain results, redacts common
+secret-shaped values in evidence/copy/report paths, and provides a way to clear
+the active session. Raw log text is not persisted by default.
 
 ## 5. Privacy policy for the MVP
 

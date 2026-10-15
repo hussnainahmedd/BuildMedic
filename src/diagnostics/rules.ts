@@ -1,4 +1,5 @@
 import type { FindingConfidence, FindingSeverity, SuggestedAction } from "../types";
+import { redactSensitiveText } from "../analyzer/normalize";
 
 import type { DiagnosticCandidate, DiagnosticRule, DiagnosticRuleContext } from "./types";
 
@@ -14,6 +15,7 @@ export const RULE_IDS = {
   network: "network/registry-failure",
   native: "native-module/build-failure",
   memory: "memory/resource-exhaustion",
+  missingCli: "tooling/missing-cli",
 } as const;
 
 const TS_DIAGNOSTIC_PATTERN = /\bTS\d{3,5}\b/i;
@@ -94,6 +96,14 @@ const ACTIONS = {
       verificationCondition: "The build completes without exhausting its memory or process resource limit.",
     },
   ],
+  missingCli: [
+    {
+      id: "tooling/install-missing-cli",
+      label: "Install or expose the requested CLI",
+      description: "Check that the command-line tool is installed and available to the build user, or invoke the project-local binary through its package script.",
+      verificationCondition: "The requested command is found and starts successfully.",
+    },
+  ],
 } as const satisfies Record<string, readonly SuggestedAction[]>;
 
 function safePackageName(value: string | undefined): string | undefined {
@@ -101,7 +111,7 @@ function safePackageName(value: string | undefined): string | undefined {
     return undefined;
   }
 
-  const safe = value.replace(PACKAGE_NAME_PATTERN, "").slice(0, 96);
+  const safe = redactSensitiveText(value).text.replace(PACKAGE_NAME_PATTERN, "").slice(0, 96);
   return safe.length > 0 ? safe : undefined;
 }
 
@@ -110,7 +120,7 @@ function safeScriptName(value: string | undefined): string | undefined {
     return undefined;
   }
 
-  const safe = value.replace(SCRIPT_NAME_PATTERN, "").slice(0, 80);
+  const safe = redactSensitiveText(value).text.replace(SCRIPT_NAME_PATTERN, "").slice(0, 80);
   return safe.length > 0 ? safe : undefined;
 }
 
@@ -120,6 +130,36 @@ function isSourceStatement(line: string): boolean {
 
 function isErrorLike(line: string): boolean {
   return /\b(?:error|failed|failure|fatal|warning|warn|exception|cannot|can't|unable|not found|denied)\b/i.test(line);
+}
+
+function boundedNearbyText(context: DiagnosticRuleContext, lineIndex: number, radius = 3): string {
+  return context.matchingLines.slice(lineIndex, Math.min(context.matchingLines.length, lineIndex + radius + 1)).join(" ").slice(0, 1200);
+}
+
+function safeDiagnosticIdentity(value: string): string {
+  return redactSensitiveText(value)
+    .text
+    .replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/gi, "")
+    .replace(/\b(?:at\s+)?(?:[A-Za-z]:)?[^\s:|]+:\d+(?::\d+)?\b/gi, "")
+    .replace(/\b\d{10,13}\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+}
+
+function sourceFileBeforeDiagnostic(line: string, codeIndex: number): string | undefined {
+  const prefix = line.slice(0, codeIndex);
+  const match = prefix.match(/(?:^|\s)((?:[A-Za-z]:)?[^\s:]+)\s*:\d+(?::\d+)?\s*(?:-\s*)?(?:error|warning)?\s*$/i)
+    ?? prefix.match(/(?:^|\s)((?:[A-Za-z]:)?[^\s(]+)\(\d+(?:,\d+)?\)\s*:\s*(?:error|warning)?\s*$/i);
+  return match === null ? undefined : redactSensitiveText(match[1] ?? "").text.replace(/\\/g, "/").toLowerCase();
+}
+
+function typeScriptSignature(line: string, code: string | undefined, codeIndex: number | undefined): string {
+  const source = codeIndex === undefined ? undefined : sourceFileBeforeDiagnostic(line, codeIndex);
+  const afterCode = codeIndex === undefined || code === undefined ? "" : line.slice(codeIndex + code.length).replace(/^\s*[-:]\s*/, "");
+  const message = safeDiagnosticIdentity(afterCode || line.replace(/\bTS\d{3,5}\b/i, ""));
+  const codePart = code ?? "compiler-diagnostic";
+  return `typescript:${codePart.toLowerCase()}:${source ?? "unknown"}:${message || "diagnostic"}`.slice(0, 512);
 }
 
 function createCandidate(
@@ -156,11 +196,12 @@ function typeScriptRule(context: DiagnosticRuleContext): readonly DiagnosticCand
       return undefined;
     }
     const codeMatch = line.match(TS_DIAGNOSTIC_PATTERN);
-    const compilerMention = /\b(?:typescript|tsc(?:\.js)?)\b[^\n]{0,200}\b(?:error|failed|failure|diagnostic|compile)\b/i.test(line);
+    const compilerMention = /\b(?:typescript|tsc(?:\.js)?)\b[^\n]{0,200}\b(?:error|failed|failure|diagnostic|compile error|compilation failed)\b/i.test(line);
+    const successMention = /\b(?:typescript|tsc(?:\.js)?)\b[^\n]{0,200}\b(?:success(?:fully)?|succeed(?:ed|s)?|passed|completed|no errors?)\b/i.test(line);
     const hasDiagnosticCode = codeMatch !== null &&
       (isErrorLike(line) || /^\s*TS\d{3,5}\b/i.test(line) || /:\d+(?::\d+)?\s*[-(]?\s*(?:error|warning)?\s*TS\d+/i.test(line));
 
-    if (!hasDiagnosticCode && !compilerMention) {
+    if (successMention || (codeMatch !== null && !/\b(?:error|warning)\s+TS\d{3,5}\b/i.test(line) && /\b(?:success(?:fully)?|succeed(?:ed|s)?|passed|completed|fixed|resolved|no errors?)\b/i.test(line)) || (!hasDiagnosticCode && !compilerMention)) {
       return undefined;
     }
 
@@ -170,10 +211,11 @@ function typeScriptRule(context: DiagnosticRuleContext): readonly DiagnosticCand
     }
 
     const severity: FindingSeverity = /\bwarning\b/i.test(line) ? "warning" : "error";
+    const locatedCodeIndex = code === undefined ? -1 : (codeMatch?.index ?? -1);
     return createCandidate(
       {
         ruleId: RULE_IDS.typescript,
-        signature: `typescript:${code ?? "compiler-diagnostic"}`,
+        signature: typeScriptSignature(line, code, locatedCodeIndex < 0 ? undefined : locatedCodeIndex),
         category: "typescript",
         severity,
         confidence: code === undefined ? "medium" : "high",
@@ -191,22 +233,24 @@ function typeScriptRule(context: DiagnosticRuleContext): readonly DiagnosticCand
 
 function missingModuleRule(context: DiagnosticRuleContext): readonly DiagnosticCandidate[] {
   return collect(context, (line, lineIndex) => {
-    const moduleMatch = line.match(/(?:cannot|can't)\s+find\s+(?:module|package|dependency)\s+["']([^"']{1,160})["']/i)
-      ?? line.match(/(?:can't|cannot)\s+resolve\s+["']([^"']{1,160})["']/i)
-      ?? line.match(/cannot\s+find\s+type\s+definition\s+file\s+for\s+["']([^"']{1,160})["']/i)
-      ?? line.match(/could\s+not\s+find\s+(?:a\s+)?declaration\s+file\s+for\s+module\s+["']([^"']{1,160})["']/i);
+    const nearby = boundedNearbyText(context, lineIndex);
+    const moduleMatch = nearby.match(/(?:cannot|can't)\s+find\s+(?:module|package|dependency)\s+["']([^"']{1,160})["']/i)
+      ?? nearby.match(/(?:can't|cannot)\s+resolve\s+["']([^"']{1,160})["']/i)
+      ?? nearby.match(/cannot\s+find\s+type\s+definition\s+file\s+for\s+["']([^"']{1,160})["']/i)
+      ?? nearby.match(/could\s+not\s+find\s+(?:a\s+)?declaration\s+file\s+for\s+module\s+["']([^"']{1,160})["']/i)
+      ?? nearby.match(/(?:cannot|can't)\s+find\s+(?:module|package|dependency)\s*[-:]?\s*([@A-Za-z0-9._/:%+~-]{1,160})/i);
     const moduleError = /\b(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND)\b/i.test(line);
-    const resolutionPhrase = /\b(?:cannot|can't|could not)\s+(?:find|resolve)\s+(?:module|package|dependency)\b/i.test(line);
-    const registryNotFound = /\b(?:npm|pnpm|yarn)\b[^\n]{0,200}\b(?:404|not found)\b/i.test(line) && /(?:package|registry|GET|ERR)/i.test(line);
+    const resolutionPhrase = /\b(?:cannot|can't|could not)\s+(?:find|resolve)\s+(?:module|package|dependency)\b/i.test(nearby);
+    const lineResolutionPhrase = /\b(?:cannot|can't|could not)\s+(?:find|resolve)\s+(?:module|package|dependency)\b/i.test(line);
     const missingDeclaration = /\bmissing:\s+[^,\s]{1,160}(?:@[^,\s]+)?\s*,\s*required by\b/i.test(line);
     const missingVersion = /\b(?:ERR_PNPM_NO_MATCHING_VERSION|YN0035)\b/i.test(line)
-      || /no matching (?:version|package) found for\s+([^\s,]{1,160})/i.test(line);
+      || /no matching (?:version|package) found for\s+([^\s,]{1,160})/i.test(nearby);
 
-    if ((moduleMatch === null && !moduleError && !resolutionPhrase && !registryNotFound && !missingDeclaration && !missingVersion) || isSourceStatement(line)) {
+    if ((moduleMatch === null && !moduleError && (!resolutionPhrase || !lineResolutionPhrase) && !missingDeclaration && !missingVersion) || isSourceStatement(line)) {
       return undefined;
     }
 
-    const versionPackage = line.match(/no matching (?:version|package) found for\s+([^\s,]{1,160})/i)?.[1];
+    const versionPackage = nearby.match(/no matching (?:version|package) found for\s+([^\s,]{1,160})/i)?.[1];
     const packageName = safePackageName(moduleMatch?.[1] ?? versionPackage);
     const signature = packageName === undefined ? "dependencies:missing-module" : `dependencies:missing-module:${packageName.toLowerCase()}`;
     const confidence: FindingConfidence = moduleMatch !== null || moduleError ? "high" : "medium";
@@ -246,10 +290,12 @@ function dependencyConflictRule(context: DiagnosticRuleContext): readonly Diagno
         ruleId: RULE_IDS.dependencyConflict,
         signature: "dependencies:peer-version-conflict",
         category: "dependencies",
-        severity: "error",
+        severity: /\b(?:YN0002|YN0060)\b/i.test(line) ? "warning" : "error",
         confidence: exactCode ? "high" : "medium",
         title: "Dependency or peer versions cannot be resolved together",
-        explanation: "The package manager found incompatible dependency or peer-version requirements in the requested install tree.",
+        explanation: /\b(?:YN0002|YN0060)\b/i.test(line)
+          ? "The package manager reported a peer dependency warning. It may not block this build, but the dependency tree has an unmet or incompatible peer requirement."
+          : "The package manager found incompatible dependency or peer-version requirements in the requested install tree.",
         suggestedActions: ACTIONS.dependencyConflict,
         verificationHint: "Run the same package-manager install or build again and confirm dependency resolution succeeds.",
       },
@@ -264,11 +310,13 @@ function lockfileRule(context: DiagnosticRuleContext): readonly DiagnosticCandid
       return undefined;
     }
     const exactCode = /\b(?:ERR_PNPM_OUTDATED_LOCKFILE|YN0028)\b/i.test(line);
-    const npmCiMismatch = /\bnpm\s+ci\b[^\n]{0,240}\b(?:package(?:\.json)?|lock)[^\n]{0,180}\b(?:in sync|synchron|only install)/i.test(line);
-    const lockMismatch = /(?:lockfile|lock file|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml)[^\n]{0,180}(?:not\s+(?:in\s+sync|up[ -]?to[ -]?date)|out\s+of\s+date|outdated|mismatch|does\s+not\s+satisfy|would have been modified|needs?\s+(?:to be\s+)?updated)/i.test(line);
-    const frozenFailure = /(?:frozen-lockfile|--immutable)[^\n]{0,120}(?:error|fail|modified|outdated|update)/i.test(line);
+    const lockCue = /\b(?:npm\s+ci|lockfile|lock file|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|frozen-lockfile|--immutable|ERR_PNPM_OUTDATED_LOCKFILE|YN0028)\b/i.test(line);
+    const nearby = boundedNearbyText(context, lineIndex);
+    const npmCiMismatch = /\bnpm\s+ci\b[^\n]{0,500}\b(?:package(?:\.json)?|lock|npm-shrinkwrap\.json)[^\n]{0,500}\b(?:in sync|synchron|only install)/i.test(nearby);
+    const lockMismatch = /(?:lockfile|lock file|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml)[^\n]{0,500}(?:not\s+(?:in\s+sync|up[ -]?to[ -]?date)|out\s+of\s+date|outdated|mismatch|does\s+not\s+satisfy|would have been modified|needs?\s+(?:to be\s+)?updated)/i.test(nearby);
+    const frozenFailure = /(?:frozen-lockfile|--immutable)[^\n]{0,500}(?:error|fail|modified|outdated|update)/i.test(nearby);
 
-    if (!exactCode && !npmCiMismatch && !lockMismatch && !frozenFailure) {
+    if (!lockCue || (!exactCode && !npmCiMismatch && !lockMismatch && !frozenFailure)) {
       return undefined;
     }
 
@@ -295,10 +343,11 @@ function missingScriptRule(context: DiagnosticRuleContext): readonly DiagnosticC
       return undefined;
     }
     const missingScript = line.match(/missing\s+script:\s*["']?([^"'\s,]{1,80})["']?/i);
-    const commandMissing = line.match(/command\s+["']([^"']{1,80})["']\s+not\s+found/i);
-    const scriptName = safeScriptName(missingScript?.[1] ?? commandMissing?.[1]);
+    const yarnMissingScript = line.match(/\berror\s+command\s+["']([^"']{1,80})["']\s+not\s+found/i);
+    const packageManagerNoScript = /\bERR_PNPM_NO_SCRIPT\b/i.test(line);
+    const scriptName = safeScriptName(missingScript?.[1] ?? yarnMissingScript?.[1]);
 
-    if (missingScript === null && commandMissing === null) {
+    if (missingScript === null && yarnMissingScript === null && !packageManagerNoScript) {
       return undefined;
     }
 
@@ -308,13 +357,43 @@ function missingScriptRule(context: DiagnosticRuleContext): readonly DiagnosticC
         signature: `package-script:missing:${(scriptName ?? "unknown").toLowerCase()}`,
         category: "package-script",
         severity: "error",
-        confidence: "high",
+        confidence: packageManagerNoScript || missingScript !== null || yarnMissingScript !== null ? "high" : "medium",
         title: scriptName === undefined ? "The requested package script is missing" : `The package script ${scriptName} is missing`,
         explanation: scriptName === undefined
           ? "The package manager could not find the script requested by the build."
           : `The package manager could not find the declared script ${scriptName}.`,
         suggestedActions: ACTIONS.missingScript,
         verificationHint: "Run the same package script again and confirm it is found and starts successfully.",
+      },
+      lineIndex,
+    );
+  });
+}
+
+function missingCliRule(context: DiagnosticRuleContext): readonly DiagnosticCandidate[] {
+  return collect(context, (line, lineIndex) => {
+    if (isSourceStatement(line)) {
+      return undefined;
+    }
+    const commandMissing = line.match(/(?:command\s+)?["']?([A-Za-z0-9_.:@/+~-]{1,80})["']?\s*:\s*(?:command\s+)?not\s+found/i)
+      ?? line.match(/command\s+["']([^"']{1,80})["']\s+not\s+found/i);
+    if (commandMissing === null || /(?:npm|pnpm|yarn)\s+(?:error|warn)\b/i.test(line) || /\berror\s+command\b/i.test(line)) {
+      return undefined;
+    }
+    const command = safeScriptName(commandMissing[1]);
+    return createCandidate(
+      {
+        ruleId: RULE_IDS.missingCli,
+        signature: `tooling:missing-cli:${(command ?? "unknown").toLowerCase()}`,
+        category: "tooling",
+        severity: "error",
+        confidence: "high",
+        title: command === undefined ? "A required command-line tool is missing" : `The command-line tool ${command} is missing`,
+        explanation: command === undefined
+          ? "The shell could not find a command required by the build. This is distinct from a missing package script."
+          : `The shell could not find ${command}. Install it or invoke the project-local binary instead of treating it as a missing package script.`,
+        suggestedActions: ACTIONS.missingCli,
+        verificationHint: "Run the same command again and confirm the command-line tool is found.",
       },
       lineIndex,
     );
@@ -359,21 +438,32 @@ function networkRule(context: DiagnosticRuleContext): readonly DiagnosticCandida
     const transportCode = /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|CERT_HAS_EXPIRED|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|ERR_TLS_CERT_ALTNAME_INVALID)\b/i.test(line);
     const dnsFailure = /\b(?:getaddrinfo|ENOTFOUND)\b/i.test(line) && /(?:registry|npm|pnpm|yarn|https?:\/\/|request|fetch)/i.test(line);
     const registryCode = /\b(?:ERR_PNPM_FETCH_(?:5\d{2}|429)|ERR_PNPM_META_FETCH_FAIL|YN0080)\b/i.test(line);
+    const authCode = /\b(?:E401|E403|ERR_PNPM_FETCH_401|ERR_PNPM_FETCH_403)\b/i.test(line);
+    const notFoundCode = /\b(?:E404|ERR_PNPM_FETCH_404)\b/i.test(line) ||
+      (/\b404\b/i.test(line) && /(?:registry|\bGET\b|package|npm|pnpm|yarn)/i.test(line));
     const registryFailure = /(?:network request failed|fetch failed|socket hang up|unable to connect|registry[^\n]{0,100}(?:unavailable|failed|timeout|error)|503\s+service unavailable|502\s+bad gateway|429\s+too many requests)/i.test(line);
 
-    if (!transportCode && !dnsFailure && !registryCode && !registryFailure) {
+    if (!transportCode && !dnsFailure && !registryCode && !authCode && !notFoundCode && !registryFailure) {
       return undefined;
     }
 
     return createCandidate(
       {
         ruleId: RULE_IDS.network,
-        signature: `network:registry:${transportCode ? "transport" : dnsFailure ? "dns" : "registry"}`,
+        signature: `network:registry:${authCode ? "auth" : notFoundCode ? "not-found" : transportCode ? "transport" : dnsFailure ? "dns" : "registry"}`,
         category: "network",
         severity: "error",
-        confidence: transportCode || dnsFailure || registryCode ? "high" : "medium",
-        title: "The build could not reach a required registry or network resource",
-        explanation: "The package manager or build process failed while connecting to a registry or another required network resource.",
+        confidence: transportCode || dnsFailure || registryCode || authCode || notFoundCode ? "high" : "medium",
+        title: authCode
+          ? "Registry authentication or authorization failed"
+          : notFoundCode
+            ? "The registry could not find the requested package"
+            : "The build could not reach a required registry or network resource",
+        explanation: authCode
+          ? "The registry rejected the request with an authentication or authorization response. Check the configured account, token scope, and private-registry access; this is not proof of a connectivity failure."
+          : notFoundCode
+            ? "The registry returned 404 for the requested package or version. Check its name, version, registry configuration, and publication state; a 404 does not by itself prove a local module is missing."
+            : "The package manager or build process failed while connecting to a registry or another required network resource.",
         suggestedActions: ACTIONS.network,
         verificationHint: "Run the same package or build request again and confirm the network diagnostic is absent.",
       },
@@ -387,7 +477,8 @@ function nativeRule(context: DiagnosticRuleContext): readonly DiagnosticCandidat
     if (isSourceStatement(line)) {
       return undefined;
     }
-    const exact = /(?:gyp\s+ERR!|node-pre-gyp\s+ERR!|ERR_DLOPEN_FAILED|binding\.gyp[^\n]{0,100}(?:not found|error)|prebuild-install[^\n]{0,100}(?:no prebuilt|warn install)|fatal error:\s+[^\n]{0,120}\.(?:h|hh|c|cc|cpp)\b|MSB\d{4})/i.test(line);
+    const noPrebuiltNotice = /(?:node-gyp|node-pre-gyp|prebuild-install)[^\n]{0,160}\b(?:no prebuilt|no pre-built|prebuilt binaries? not found)\b/i.test(line);
+    const exact = /(?:gyp\s+ERR!|node-pre-gyp\s+ERR!|ERR_DLOPEN_FAILED|binding\.gyp[^\n]{0,100}(?:not found|error)|fatal error:\s+[^\n]{0,120}\.(?:h|hh|c|cc|cpp)\b|MSB\d{4})/i.test(line);
     const generic = /(?:node-gyp|node-pre-gyp|native module|prebuild)[^\n]{0,100}(?:error|failed|unable|not found|no prebuilt)/i.test(line);
     const makeFailure = /\bmake:\s+\*{3}[^\n]{0,120}(?:error|failed)/i.test(line) && /(?:gyp|native|binding|compile|c\+\+)/i.test(line);
 
@@ -395,15 +486,19 @@ function nativeRule(context: DiagnosticRuleContext): readonly DiagnosticCandidat
       return undefined;
     }
 
+    const ambiguousPrebuilt = noPrebuiltNotice && !exact && !makeFailure;
+
     return createCandidate(
       {
         ruleId: RULE_IDS.native,
-        signature: `native-module:${exact ? "toolchain-error" : "build-failure"}`,
+        signature: `native-module:${ambiguousPrebuilt ? "prebuilt-unavailable" : exact ? "toolchain-error" : "build-failure"}`,
         category: "native-module",
-        severity: "error",
-        confidence: exact ? "high" : "medium",
-        title: "A native Node.js module failed to build",
-        explanation: "A platform-specific Node.js module could not use its prebuilt binary or complete its native compilation step.",
+        severity: ambiguousPrebuilt ? "warning" : "error",
+        confidence: ambiguousPrebuilt ? "low" : exact ? "high" : "medium",
+        title: ambiguousPrebuilt ? "A native module has no prebuilt binary" : "A native Node.js module failed to build",
+        explanation: ambiguousPrebuilt
+          ? "The native module did not provide a prebuilt binary for this platform. This is a warning and may fall back to a source build; it is not by itself a failed build."
+          : "A platform-specific Node.js module could not use its prebuilt binary or complete its native compilation step.",
         suggestedActions: ACTIONS.native,
         verificationHint: "Run the same install or build again and confirm the native-module diagnostic is absent.",
       },
@@ -430,10 +525,14 @@ function memoryRule(context: DiagnosticRuleContext): readonly DiagnosticCandidat
         ruleId: RULE_IDS.memory,
         signature: `memory:resource:${exact ? "out-of-memory" : killed ? "killed-process" : "resource-exhaustion"}`,
         category: "memory",
-        severity: "critical",
+        severity: exact ? "critical" : killed ? "warning" : "error",
         confidence: exact ? "high" : killed ? "low" : "medium",
-        title: "The build exhausted memory or another process resource",
-        explanation: "The Node.js process or its build environment ran out of memory or was terminated after exceeding a resource limit.",
+        title: exact ? "The build exhausted memory or another process resource" : killed ? "The build process was terminated unexpectedly" : "The build may have exhausted a process resource",
+        explanation: exact
+          ? "The Node.js process reported a concrete memory exhaustion condition."
+          : killed
+            ? "SIGKILL or exit status 137 is ambiguous: the process may have been stopped by an external supervisor, timeout, or resource limit, but this evidence does not prove that memory was exhausted."
+            : "The build reported resource exhaustion, but the available evidence does not identify the exact resource.",
         suggestedActions: ACTIONS.memory,
         verificationHint: "Run the same build again and confirm the resource-exhaustion diagnostic is absent.",
       },
@@ -448,6 +547,7 @@ export const DIAGNOSTIC_RULES: readonly DiagnosticRule[] = [
   { id: RULE_IDS.dependencyConflict, detect: dependencyConflictRule },
   { id: RULE_IDS.lockfile, detect: lockfileRule },
   { id: RULE_IDS.missingScript, detect: missingScriptRule },
+  { id: RULE_IDS.missingCli, detect: missingCliRule },
   { id: RULE_IDS.filesystem, detect: filesystemRule },
   { id: RULE_IDS.network, detect: networkRule },
   { id: RULE_IDS.native, detect: nativeRule },

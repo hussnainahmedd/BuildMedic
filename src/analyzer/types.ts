@@ -1,7 +1,12 @@
 import type { AnalysisResult, AnalysisSource } from "../types";
+import {
+  DEFAULT_MAX_LOG_BYTES, DEFAULT_MAX_LOG_LINES, DEFAULT_MAX_LOG_LINE_LENGTH,
+  HARD_MAX_LOG_BYTES, HARD_MAX_LOG_LINES, HARD_MAX_LOG_LINE_LENGTH,
+} from "../lib/validation";
 
-export const DEFAULT_MAX_ANALYZED_BYTES = 25 * 1024 * 1024;
-export const DEFAULT_MAX_ANALYZED_LINES = 100_000;
+export const DEFAULT_MAX_ANALYZED_BYTES = DEFAULT_MAX_LOG_BYTES;
+export const DEFAULT_MAX_ANALYZED_LINES = DEFAULT_MAX_LOG_LINES;
+export const DEFAULT_MAX_ANALYZED_LINE_LENGTH = DEFAULT_MAX_LOG_LINE_LENGTH;
 export const DEFAULT_MAX_FINDINGS = 32;
 export const DEFAULT_MAX_EVIDENCE_LINES = 6;
 export const DEFAULT_MAX_EVIDENCE_LINE_LENGTH = 512;
@@ -9,8 +14,9 @@ export const DEFAULT_CONTEXT_LINES = 1;
 export const DEFAULT_MAX_MATCHES_PER_RULE = 256;
 
 /** Hard ceilings keep caller-provided tuning from removing safety bounds. */
-export const HARD_MAX_ANALYZED_BYTES = 50 * 1024 * 1024;
-export const HARD_MAX_ANALYZED_LINES = 200_000;
+export const HARD_MAX_ANALYZED_BYTES = HARD_MAX_LOG_BYTES;
+export const HARD_MAX_ANALYZED_LINES = HARD_MAX_LOG_LINES;
+export const HARD_MAX_ANALYZED_LINE_LENGTH = HARD_MAX_LOG_LINE_LENGTH;
 export const HARD_MAX_FINDINGS = 256;
 export const HARD_MAX_EVIDENCE_LINES = 16;
 export const HARD_MAX_EVIDENCE_LINE_LENGTH = 4096;
@@ -24,6 +30,7 @@ export interface AnalyzeOptions {
   /** Optional character guard for environments that impose a string limit. */
   readonly maxInputCharacters?: number;
   readonly maxInputLines?: number;
+  readonly maxInputLineLength?: number;
   readonly maxFindings?: number;
   readonly maxEvidenceLines?: number;
   readonly maxEvidenceLineLength?: number;

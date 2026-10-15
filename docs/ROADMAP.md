@@ -1,7 +1,7 @@
 # BuildMedic Roadmap
 
-**Status:** Proposed sequence. Dates are intentionally omitted until the
-implementation plan and contributor capacity are known.
+**Status:** Checkpointed sequence. Phases 0–4 are implemented in the current
+local MVP; the remaining release-hardening work is explicit below.
 
 Priorities use **P0** for required foundation/MVP work, **P1** for high-value
 quality or usability work, and **P2** for later expansion.
@@ -23,12 +23,14 @@ foundation are in place.
 the remaining implementation work without mistaking plans for completed
 features.
 
-## Phase 1 — Reproducible application scaffold and frontend demo
+## Phase 1 — Reproducible application scaffold and frontend foundation
 
 **Priority:** P0
-**Status:** Frontend milestone and Docker production runtime are implemented;
-Linux Docker build, startup, health, and homepage smoke checks passed in
-GitHub Actions for the current delivery commit.
+**Status:** Completed. The Node.js 22 toolchain, lockfile, frontend foundation,
+production server, Docker image, and Linux CI workflow are implemented. The
+last verified Docker/HTTP CI run is
+[38806248540](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38806248540)
+(`success`, commit `7f8a7cf`).
 
 - Add the TypeScript, React, Vite, and Vitest manifests.
 - Generate and commit the npm lockfile using Node.js 22.
@@ -45,14 +47,16 @@ the first real test and production build pass from the lockfile.
 ## Phase 2 — Domain analysis engine
 
 **Priority:** P0
-**Status:** Planned.
+**Status:** Completed in this checkpoint.
 
 - Define shared input, finding, rule, and verification types.
-- Implement newline normalization, bounded extraction, and deterministic rule
-  evaluation.
-- Add sanitized fixtures for common Node.js build failures.
-- Implement ranking, evidence references, no-match behavior, and validation
-  limits.
+- Implement newline normalization, bounded extraction, deterministic rule
+  evaluation, secret-shaped display redaction, and partial-result metadata.
+- Add sanitized fixtures and offline tests for npm, pnpm, yarn, TypeScript,
+  dependencies, lockfiles, scripts, permissions, network, native modules, and
+  resource failures.
+- Implement causal ranking, duplicate consolidation, evidence references,
+  no-match behavior, and validation limits.
 
 **Exit criteria:** Fixture-driven tests prove stable findings, evidence, and
 safe behavior for valid, invalid, ambiguous, and adversarial logs.
@@ -60,12 +64,16 @@ safe behavior for valid, invalid, ambiguous, and adversarial logs.
 ## Phase 3 — Browser workspace
 
 **Priority:** P0
-**Status:** Planned.
+**Status:** Completed in this checkpoint.
 
-- Add accessible paste/file input and clear states.
-- Render summary, severity/confidence, evidence, explanations, and actions.
-- Provide copyable local summaries without adding a network dependency.
-- Meet the validation and accessibility specification.
+- Add accessible paste/file/drop input, loading, error, empty, invalid, and
+  clear states.
+- Render live summary, severity/confidence, search/filter/sort, evidence,
+  explanations, and actions.
+- Provide sanitized copy/report exports and metadata-only local history without
+  adding a network dependency.
+- Add component coverage for the critical local flows; a full manual WCAG
+  review remains part of Phase 5.
 
 **Exit criteria:** A user can complete the primary analyze flow with keyboard
 and browser-only execution, and UI tests cover the critical states.
@@ -73,12 +81,15 @@ and browser-only execution, and UI tests cover the critical states.
 ## Phase 4 — Fix verification
 
 **Priority:** P0
-**Status:** Planned.
+**Status:** Completed in this checkpoint.
 
-- Add baseline/rerun inputs and structured comparison.
-- Match findings by stable identity, not array position.
-- Show resolved, persistent, new, no-match, and invalid comparison states.
-- Add regression fixtures for common fix outcomes.
+- Add baseline/rerun inputs and structured comparison over actual analyzer
+  results.
+- Match findings by normalized stable rule/signature identity, not array
+  position; expose conservative uncertain states for ambiguous or partial data.
+- Show resolved, persistent, new, no-match, and invalid comparison states
+  without claiming that a build passed.
+- Add regression fixtures for common fix outcomes and identity changes.
 
 **Exit criteria:** The verification acceptance criteria in `docs/PRD.md` pass
 without executing commands or uploading logs.
@@ -86,13 +97,15 @@ without executing commands or uploading logs.
 ## Phase 5 — Hardening and release
 
 **Priority:** P1
-**Status:** Planned.
+**Status:** Pending after this checkpoint.
 
-- Measure input-size and rendering budgets.
+- Measure representative input-size and rendering budgets and record actual
+  results.
 - Complete security, dependency, accessibility, and cross-browser reviews.
-- Verify the production image on a Linux GitHub Actions runner.
-- Document static deployment and release procedures.
-- Publish a first release with limitations and known rule coverage.
+- Re-run and inspect Linux CI/Docker verification after this checkpoint is
+  pushed.
+- Finish any remaining public-copy/documentation review and publish release
+  notes with known rule coverage and limitations.
 
 **Exit criteria:** Required quality gates are green in Linux CI and the release
 artifacts are reproducible from a clean checkout.

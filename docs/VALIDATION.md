@@ -1,7 +1,7 @@
 # BuildMedic Validation and Accessibility
 
-**Status:** Proposed specification with a working frontend input flow. Full
-engine integration and complete accessibility verification remain pending.
+**Status:** The shared validation and analysis boundary is implemented for the
+local MVP. Manual accessibility and cross-browser verification remain pending.
 
 ## 1. Validation model
 

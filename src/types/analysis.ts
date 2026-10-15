@@ -13,6 +13,7 @@ export interface AnalysisInputSummary {
   readonly byteCount: number;
   readonly lineCount: number;
   readonly normalizedNewlines: boolean;
+  readonly countsArePartial?: boolean;
 }
 
 export interface AnalysisRequest {
@@ -26,6 +27,22 @@ export interface AnalysisResultBase {
   readonly analyzedAt: string;
   readonly input: AnalysisInputSummary;
   readonly ruleCatalogVersion: string;
+  readonly metadata?: AnalysisMetadata;
+}
+
+export type AnalysisLimit = "findings" | "matches-per-rule" | "evidence";
+
+/** Optional for compatibility with older stored results. No marker is an executed check. */
+export interface AnalysisMetadata {
+  readonly partial: boolean;
+  readonly limitsReached: readonly AnalysisLimit[];
+  readonly omittedFindingCount?: number;
+  readonly cappedRuleIds?: readonly string[];
+  readonly evidenceTruncated?: boolean;
+  readonly buildCompletion?: {
+    readonly lineNumber: number;
+    readonly text: string;
+  };
 }
 
 export interface CompleteAnalysisResult extends AnalysisResultBase {
@@ -37,7 +54,7 @@ export interface CompleteAnalysisResult extends AnalysisResultBase {
 export interface NoMatchAnalysisResult extends AnalysisResultBase {
   readonly status: "no-match";
   readonly findings: readonly [];
-  readonly message: "No supported diagnostic matched this log.";
+  readonly message: string;
 }
 
 export interface InvalidAnalysisResult extends AnalysisResultBase {

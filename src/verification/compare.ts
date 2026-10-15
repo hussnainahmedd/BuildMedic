@@ -10,6 +10,7 @@ import type {
   VerificationSummary,
 } from "../types/verification";
 import type { ValidationError, ValidationErrorCode } from "../types/validation";
+import { redactSensitiveText } from "../analyzer/normalize";
 
 /**
  * The comparison engine does not copy complete findings into its result. A
@@ -73,9 +74,9 @@ export function normalizeDiagnosticIdentity(value: unknown): string {
 }
 
 /**
- * Returns the stable key used by the comparison engine for a finding. A rule
- * id is preferred; findings without one receive a signature key and are
- * deliberately treated as uncertain by the matcher.
+ * Returns the stable rule-plus-signature key used by the comparison engine.
+ * Legacy findings without an explicit signature receive an evidence-derived
+ * fallback only when that evidence is bounded and usable.
  */
 export function getFindingKey(finding: Finding): string {
   return makeCandidate(finding, 0).key;
@@ -123,7 +124,7 @@ function normalizeDiagnosticText(value: unknown, limit = MAX_SIGNATURE_LENGTH): 
     return { value: "", truncated: false };
   }
 
-  const normalized = replaceControlCharacters(value.normalize("NFKC").replace(ANSI_ESCAPE_PATTERN, ""))
+  const normalized = replaceControlCharacters(redactSensitiveText(value).text.normalize("NFKC").replace(ANSI_ESCAPE_PATTERN, ""))
     .replace(/\s+/g, " ")
     .trim();
 
@@ -139,7 +140,15 @@ function normalizeDisplayText(value: unknown, limit: number): string {
 
 function normalizeSignatureText(value: unknown): NormalizedValue {
   const normalized = normalizeDiagnosticText(value);
-  return { value: normalized.value.toLowerCase(), truncated: normalized.truncated };
+  const stable = normalized.value
+    .replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/gi, "")
+    .replace(/((?:[A-Za-z]:)?[^\s|]+):\d+(?::\d+)?(?=\s|$)/g, "$1")
+    .replace(/\b\d{10,13}\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/\s*([/:#._-])\s*/g, "$1");
+  return { value: stable, truncated: normalized.truncated };
 }
 
 function readEvidenceSignature(finding: Record<string, unknown>): NormalizedValue {
@@ -147,13 +156,14 @@ function readEvidenceSignature(finding: Record<string, unknown>): NormalizedValu
     return { value: "", truncated: false };
   }
 
-  const evidence = finding.evidence
+  const rawEvidence = finding.evidence
     .filter(isRecord)
     .map((entry) => ({
       primary: entry.role === "primary" ? 0 : 1,
       text: normalizeSignatureText(entry.text),
     }))
-    .filter((entry) => entry.text.value.length > 0)
+    .filter((entry) => entry.text.value.length > 0);
+  const evidence = (rawEvidence.some((entry) => entry.primary === 0) ? rawEvidence.filter((entry) => entry.primary === 0) : rawEvidence)
     .sort((left, right) => left.primary - right.primary || compareStrings(left.text.value, right.text.value));
 
   if (evidence.length === 0) {
@@ -174,14 +184,23 @@ function makeCandidate(value: unknown, index: number): Candidate {
   const title = normalizeDisplayText(finding?.title, MAX_TITLE_LENGTH);
   const evidenceSignature = readEvidenceSignature(finding ?? {});
   const titleSignature = normalizeSignatureText(finding?.title);
-  const signatureValue = evidenceSignature.value || titleSignature.value;
+  const rawSignature = finding?.signature;
+  const explicitSignatureValue = normalizeSignatureText(rawSignature);
+  const hasExplicitSignature = typeof rawSignature === "string" && explicitSignatureValue.value.length > 0;
+  const signatureValue = hasExplicitSignature
+    ? explicitSignatureValue.value
+    : evidenceSignature.value || titleSignature.value;
   const signature = signatureValue.slice(0, MAX_SIGNATURE_LENGTH);
   const signatureWasTruncated =
-    evidenceSignature.truncated || (!evidenceSignature.value && titleSignature.truncated) || signature.length < signatureValue.length;
+    (hasExplicitSignature ? explicitSignatureValue.truncated : evidenceSignature.truncated || (!evidenceSignature.value && titleSignature.truncated)) || signature.length < signatureValue.length;
   const explicitRuleId = typeof rawRuleId === "string" && normalizedRuleId.value.length > 0;
-  const identityReliable = explicitRuleId && !normalizedRuleId.truncated && !signatureWasTruncated;
+  const legacyFallbackReliable = !hasExplicitSignature && evidenceSignature.value.length > 0 && !evidenceSignature.truncated;
   const fallbackKey = signature ? `signature:${signature}` : `unknown:${String(index)}`;
-  const key = (normalizedRuleId.value || fallbackKey).slice(0, MAX_KEY_LENGTH);
+  const rawKey = normalizedRuleId.value
+    ? `${normalizedRuleId.value}|${hasExplicitSignature ? "sig:" : "legacy:"}${signature || fallbackKey}`
+    : fallbackKey;
+  const key = rawKey.slice(0, MAX_KEY_LENGTH);
+  const identityReliable = explicitRuleId && !normalizedRuleId.truncated && !signatureWasTruncated && rawKey.length <= MAX_KEY_LENGTH && (hasExplicitSignature || legacyFallbackReliable);
   const rawId = finding?.id;
   const id = typeof rawId === "string" && rawId.length > 0 ? rawId.slice(0, MAX_FINDING_ID_LENGTH) : undefined;
   const ruleId = normalizedRuleId.value || key;
@@ -282,6 +301,7 @@ function markUnmatchedGroup(
 function matchCandidates(
   baselineCandidates: readonly Candidate[],
   rerunCandidates: readonly Candidate[],
+  forceUncertain = false,
 ): ComparisonDraft[] {
   const drafts: ComparisonDraft[] = [];
   const usedBaseline = new Set<number>();
@@ -373,7 +393,10 @@ function matchCandidates(
     markPair(drafts, undefined, candidate, candidate.identityReliable ? "new" : "uncertain");
   }
 
-  return drafts.sort((left, right) => compareStrings(left.sortKey, right.sortKey));
+  const normalizedDrafts = forceUncertain
+    ? drafts.map((draft) => draft.state === "uncertain" ? draft : createDraft("uncertain", draft.baseline, draft.rerun))
+    : drafts;
+  return normalizedDrafts.sort((left, right) => compareStrings(left.sortKey, right.sortKey));
 }
 
 function emptySummary(): VerificationSummary {
@@ -417,6 +440,12 @@ function getResultBase(baseline: unknown, rerun: unknown) {
     baselineAnalysisId,
     rerunAnalysisId,
   };
+}
+
+function resolveMaxComparisons(value: number | undefined): number {
+  return Number.isFinite(value)
+    ? Math.max(0, Math.min(MAX_COMPARISONS, Math.floor(value as number)))
+    : DEFAULT_MAX_COMPARISONS;
 }
 
 function isValidationErrorCode(value: unknown): value is ValidationErrorCode {
@@ -490,22 +519,46 @@ function makeInvalidResult(
   };
 }
 
-function makeNoMatchResult(baseline: unknown, rerun: unknown): NoMatchVerificationResult {
+function hasCompletionMarker(value: AnalysisResult): boolean {
+  const marker = value.metadata?.buildCompletion;
+  return marker !== undefined && Number.isInteger(marker.lineNumber) && marker.lineNumber > 0 && typeof marker.text === "string" && marker.text.length > 0;
+}
+
+function makeNoMatchResult(
+  baseline: unknown,
+  rerun: unknown,
+  reason: string,
+  maxComparisons = DEFAULT_MAX_COMPARISONS,
+): NoMatchVerificationResult {
   const baselineStatus = isRecord(baseline) && baseline.status === "no-match";
   const rerunStatus = isRecord(rerun) && rerun.status === "no-match";
   const side = baselineStatus && rerunStatus ? "both analyses" : baselineStatus ? "the baseline analysis" : "the rerun analysis";
+  const baselineCandidates = isRecord(baseline) && baseline.status === "complete" && Array.isArray(baseline.findings)
+    ? baseline.findings.map((finding, index) => makeCandidate(finding, index))
+    : [];
+  const rerunCandidates = isRecord(rerun) && rerun.status === "complete" && Array.isArray(rerun.findings)
+    ? rerun.findings.map((finding, index) => makeCandidate(finding, index))
+    : [];
+  const drafts = matchCandidates(baselineCandidates, rerunCandidates, true);
+  const summary = drafts.length === 0
+    ? { ...emptySummary(), uncertainCount: 1 }
+    : summarize(drafts);
+  const baselineAnalysisId = getAnalysisId(baseline, "unknown-baseline");
+  const rerunAnalysisId = getAnalysisId(rerun, "unknown-rerun");
+  const truncated = drafts.length > maxComparisons;
 
   return {
     ...getResultBase(baseline, rerun),
     status: "no-match",
-    outcome: "no-change",
-    comparisons: [],
-    summary: emptySummary(),
-    message: `Comparison is uncertain because ${side} had no supported diagnostic match; no transition labels were produced.`,
+    outcome: "uncertain",
+    comparisons: drafts.slice(0, maxComparisons).map((draft, index) => makeComparison(draft, baselineAnalysisId, rerunAnalysisId, index)),
+    summary,
+    message: `Comparison is uncertain because ${side} had no supported diagnostic match. ${reason} No executed build outcome was inferred.${truncated ? " Some comparison rows were omitted from the bounded result." : ""}`,
   };
 }
 
-function outcomeFor(summary: VerificationSummary): VerificationOutcome {
+function outcomeFor(summary: VerificationSummary, forceUncertain = false): VerificationOutcome {
+  if (forceUncertain) return "uncertain";
   if ((summary.uncertainCount ?? 0) > 0) return "uncertain";
   if (summary.resolvedCount > 0 && summary.newCount === 0) return "improved";
   if (summary.newCount > 0 && summary.resolvedCount === 0) return "regressed";
@@ -513,7 +566,7 @@ function outcomeFor(summary: VerificationSummary): VerificationOutcome {
   return "no-change";
 }
 
-function messageFor(summary: VerificationSummary, outcome: VerificationOutcome, truncated: boolean): string {
+function messageFor(summary: VerificationSummary, outcome: VerificationOutcome, truncated: boolean, reason?: string): string {
   let message: string;
 
   if (outcome === "uncertain") {
@@ -530,6 +583,7 @@ function messageFor(summary: VerificationSummary, outcome: VerificationOutcome, 
     message = "The same diagnostics remain; no change was detected.";
   }
 
+  if (reason) message = `${message} ${reason}`;
   return truncated ? `${message} Some comparison rows were omitted from the bounded result.` : message;
 }
 
@@ -562,6 +616,22 @@ function makeComparison(
   };
 }
 
+function comparisonQuality(baseline: AnalysisResult, rerun: AnalysisResult): { readonly uncertain: boolean; readonly reason?: string } {
+  const reasons: string[] = [];
+  if (baseline.ruleCatalogVersion !== rerun.ruleCatalogVersion) {
+    reasons.push("The baseline and rerun use different rule-catalog versions.");
+  }
+  const baselineFindingCatalogMismatch = baseline.status === "complete" && baseline.findings.some((finding) => finding.ruleCatalogVersion !== baseline.ruleCatalogVersion);
+  const rerunFindingCatalogMismatch = rerun.status === "complete" && rerun.findings.some((finding) => finding.ruleCatalogVersion !== rerun.ruleCatalogVersion);
+  if (baselineFindingCatalogMismatch || rerunFindingCatalogMismatch) {
+    reasons.push("One or more findings use a different rule-catalog version than their analysis.");
+  }
+  if (baseline.metadata?.partial || rerun.metadata?.partial || (baseline.metadata?.limitsReached?.length ?? 0) > 0 || (rerun.metadata?.limitsReached?.length ?? 0) > 0 || baseline.metadata?.evidenceTruncated || rerun.metadata?.evidenceTruncated || baseline.input.countsArePartial || rerun.input.countsArePartial) {
+    reasons.push("One analysis was capped or otherwise partial, so absence of a finding is not exhaustive.");
+  }
+  return { uncertain: reasons.length > 0, ...(reasons.length > 0 ? { reason: reasons.join(" ") } : {}) };
+}
+
 /**
  * Compares analyzer output, never raw logs. Stable rule identity is preferred
  * over generated finding ids or array position; duplicate or incomplete
@@ -589,22 +659,56 @@ export function compareAnalysisResults(
     );
   }
 
+  const quality = comparisonQuality(baselineResult, rerunResult);
+
   if (baselineResult.status === "no-match" || rerunResult.status === "no-match") {
-    return makeNoMatchResult(baselineResult, rerunResult);
+    const baselineNoMatchIsBounded = baselineResult.status !== "no-match" || hasCompletionMarker(baselineResult);
+    const rerunNoMatchIsBounded = rerunResult.status !== "no-match" || hasCompletionMarker(rerunResult);
+    if (!baselineNoMatchIsBounded || !rerunNoMatchIsBounded) {
+      return makeNoMatchResult(
+        baselineResult,
+        rerunResult,
+        quality.reason ?? "An explicit build-completion marker was not present, so the rerun may be arbitrary or incomplete.",
+        resolveMaxComparisons(options.maxComparisons),
+      );
+    }
+
+    const baselineCandidates = baselineResult.status === "complete"
+      ? baselineResult.findings.map((finding, index) => makeCandidate(finding, index))
+      : [];
+    const rerunCandidates = rerunResult.status === "complete"
+      ? rerunResult.findings.map((finding, index) => makeCandidate(finding, index))
+      : [];
+    const drafts = matchCandidates(baselineCandidates, rerunCandidates, quality.uncertain);
+    const summary = quality.uncertain && drafts.length === 0
+      ? { ...emptySummary(), uncertainCount: 1 }
+      : summarize(drafts);
+    const base = getResultBase(baselineResult, rerunResult);
+    const outcome = outcomeFor(summary, quality.uncertain);
+    const maxComparisons = resolveMaxComparisons(options.maxComparisons);
+    const truncated = drafts.length > maxComparisons;
+    const markerReason = "An explicit build-completion marker supports this diagnostic comparison; it does not prove that the command executed to completion.";
+    return {
+      ...base,
+      status: "compared",
+      outcome,
+      comparisons: drafts.slice(0, maxComparisons).map((draft, index) => makeComparison(draft, base.baselineAnalysisId, base.rerunAnalysisId, index)),
+      summary,
+      message: messageFor(summary, outcome, truncated, [quality.reason, markerReason].filter(Boolean).join(" ")),
+    };
   }
 
   const baselineCandidates = baselineResult.findings.map((finding, index) => makeCandidate(finding, index));
   const rerunCandidates = rerunResult.findings.map((finding, index) => makeCandidate(finding, index));
-  const drafts = matchCandidates(baselineCandidates, rerunCandidates);
-  const summary = summarize(drafts);
+  const drafts = matchCandidates(baselineCandidates, rerunCandidates, quality.uncertain);
+  const summary = quality.uncertain && drafts.length === 0
+    ? { ...emptySummary(), uncertainCount: 1 }
+    : summarize(drafts);
   const base = getResultBase(baselineResult, rerunResult);
-  const requestedLimit = options.maxComparisons ?? DEFAULT_MAX_COMPARISONS;
-  const maxComparisons = Number.isFinite(requestedLimit)
-    ? Math.max(0, Math.min(MAX_COMPARISONS, Math.floor(requestedLimit)))
-    : DEFAULT_MAX_COMPARISONS;
+  const maxComparisons = resolveMaxComparisons(options.maxComparisons);
   const truncated = drafts.length > maxComparisons;
   const comparisons = drafts.slice(0, maxComparisons).map((draft, index) => makeComparison(draft, base.baselineAnalysisId, base.rerunAnalysisId, index));
-  const outcome = outcomeFor(summary);
+  const outcome = outcomeFor(summary, quality.uncertain);
 
   const result: ComparedVerificationResult = {
     ...base,
@@ -612,7 +716,7 @@ export function compareAnalysisResults(
     outcome,
     comparisons,
     summary,
-    message: messageFor(summary, outcome, truncated),
+    message: messageFor(summary, outcome, truncated, quality.reason),
   };
 
   return result;

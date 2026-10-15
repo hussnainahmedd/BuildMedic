@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { analyzeLog } from "./analyzer";
 import { PublicLayout, WorkspaceShell, type Navigate } from "./components/layout";
 import { Toast } from "./components/ui";
-import { DEMO_ANALYSIS, DEMO_NODE_BUILD_LOG } from "./data";
-import { getUtf8ByteLength } from "./lib/validation";
+import { DEMO_NODE_BUILD_LOG } from "./data";
 import {
   AboutPage,
   DocumentationPage,
@@ -28,10 +28,26 @@ import {
   VerificationPage,
   type WorkspacePageProps,
 } from "./pages/workspace";
-import type { DemoAnalysisResult, ThemeMode, UserPreferences } from "./types";
+import type {
+  AnalysisHistoryEntry,
+  AnalysisResult,
+  AnalysisSource,
+  ThemeMode,
+  UserPreferences,
+  VerificationResult,
+} from "./types";
 import { DEFAULT_USER_PREFERENCES } from "./types/preferences";
+import { compareAnalysisResults } from "./verification";
 
 const PREFERENCES_STORAGE_KEY = "buildmedic.preferences.v1";
+const HISTORY_STORAGE_KEY = "buildmedic.history.v1";
+const MAX_HISTORY_ENTRIES = 24;
+
+interface SessionAnalysisRecord {
+  readonly log: string;
+  readonly result: AnalysisResult;
+  readonly fileName?: string;
+}
 
 function normalizePath(pathname: string): string {
   if (pathname.length > 1 && pathname.endsWith("/")) {
@@ -88,29 +104,81 @@ function readPreferences(): UserPreferences {
   }
 }
 
+function isHistoryEntry(value: unknown): value is AnalysisHistoryEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<AnalysisHistoryEntry>;
+  return typeof candidate.id === "string"
+    && typeof candidate.analysisId === "string"
+    && typeof candidate.label === "string"
+    && typeof candidate.createdAt === "string"
+    && !Number.isNaN(Date.parse(candidate.createdAt))
+    && (candidate.source === "paste" || candidate.source === "file")
+    && (candidate.status === "complete" || candidate.status === "no-match" || candidate.status === "invalid")
+    && typeof candidate.inputBytes === "number"
+    && Number.isFinite(candidate.inputBytes)
+    && candidate.inputBytes >= 0
+    && typeof candidate.findingCount === "number"
+    && Number.isFinite(candidate.findingCount)
+    && candidate.findingCount >= 0
+    && typeof candidate.summary === "string";
+}
+
+function readHistory(): readonly AnalysisHistoryEntry[] {
+  try {
+    const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isHistoryEntry).slice(0, MAX_HISTORY_ENTRIES);
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalStorage(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Preferences and metadata history are optional conveniences. A blocked or
+    // full browser store must never prevent local analysis from working.
+  }
+}
+
+function emptyAnalysis(): AnalysisResult {
+  return analyzeLog("");
+}
+
+function makeHistoryEntry(
+  result: AnalysisResult,
+  source: AnalysisSource,
+  fileName?: string,
+): AnalysisHistoryEntry {
+  const findingCount = result.status === "complete" ? result.findings.length : 0;
+  const label = fileName || (source === "file" ? "Uploaded build log" : "Pasted build log");
+  const summary = result.status === "complete"
+    ? `${findingCount} ${findingCount === 1 ? "finding" : "findings"} from local deterministic rules.`
+    : result.status === "no-match"
+      ? "No supported diagnostic matched this log."
+      : result.error.message;
+  const topFindingId = result.status === "complete" ? result.findings[0]?.id : undefined;
+
+  return {
+    id: `history-${result.id}`,
+    analysisId: result.id,
+    label: label.slice(0, 120),
+    createdAt: result.analyzedAt,
+    source,
+    status: result.status,
+    inputBytes: result.input.byteCount,
+    findingCount,
+    summary: summary.slice(0, 240),
+    ...(topFindingId ? { topFindingId } : {}),
+  };
+}
+
 function resolveColorScheme(theme: ThemeMode): "dark" | "light" {
   if (theme !== "system") return theme;
   return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-}
-
-function makeDemoResponse(text: string, source: "paste" | "file", fileName?: string): DemoAnalysisResult {
-  if (DEMO_ANALYSIS.status !== "complete") {
-    return DEMO_ANALYSIS;
-  }
-
-  return {
-    ...DEMO_ANALYSIS,
-    id: `demo-analysis-${Date.now()}`,
-    analyzedAt: new Date().toISOString(),
-    input: {
-      ...DEMO_ANALYSIS.input,
-      source,
-      fileName: fileName ?? (source === "file" ? DEMO_NODE_BUILD_LOG.fileName : undefined),
-      byteCount: getUtf8ByteLength(text),
-      lineCount: text.split("\n").length,
-    },
-    message: "Demonstration response loaded. Live analysis is planned.",
-  };
 }
 
 function usePageTitle(path: string) {
@@ -141,9 +209,18 @@ function usePageTitle(path: string) {
 export function App() {
   const [path, navigate] = useCurrentPath();
   const [preferences, setPreferences] = useState<UserPreferences>(readPreferences);
-  const [currentLog, setCurrentLog] = useState(DEMO_NODE_BUILD_LOG.text);
-  const [analysis, setAnalysis] = useState<DemoAnalysisResult>(DEMO_ANALYSIS);
+  const [currentLog, setCurrentLog] = useState("");
+  const [currentFileName, setCurrentFileName] = useState<string | undefined>();
+  const [analysis, setAnalysis] = useState<AnalysisResult>(emptyAnalysis);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [history, setHistory] = useState<readonly AnalysisHistoryEntry[]>(readHistory);
+  const [sessionAnalyses, setSessionAnalyses] = useState<Record<string, SessionAnalysisRecord>>({});
+  const [verification, setVerification] = useState<VerificationResult | null>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const analysisTimer = useRef<number | null>(null);
+  const verificationTimer = useRef<number | null>(null);
   const isWorkspace = path === "/app" || path.startsWith("/app/");
   usePageTitle(path);
 
@@ -152,8 +229,17 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedScheme;
     document.documentElement.dataset.motion = preferences.reducedMotion ? "reduced" : "full";
-    window.localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+    writeLocalStorage(PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
   }, [preferences, resolvedScheme]);
+
+  useEffect(() => {
+    writeLocalStorage(HISTORY_STORAGE_KEY, JSON.stringify(history));
+  }, [history]);
+
+  useEffect(() => () => {
+    if (analysisTimer.current !== null) window.clearTimeout(analysisTimer.current);
+    if (verificationTimer.current !== null) window.clearTimeout(verificationTimer.current);
+  }, []);
 
   const notify = (message: string) => {
     setToastMessage(message);
@@ -162,13 +248,109 @@ export function App() {
 
   const openDemo = () => {
     setCurrentLog(DEMO_NODE_BUILD_LOG.text);
+    setCurrentFileName(DEMO_NODE_BUILD_LOG.fileName);
+    setAnalysis(emptyAnalysis());
+    setAnalysisError(null);
     navigate("/app/new-analysis");
   };
 
   const handleAnalyze = (text: string, source: "paste" | "file" = "paste", fileName?: string) => {
+    if (analysisTimer.current !== null) window.clearTimeout(analysisTimer.current);
     setCurrentLog(text);
-    setAnalysis(makeDemoResponse(text, source, fileName));
-    notify("Demonstration result loaded. Live analysis is planned.");
+    setCurrentFileName(fileName);
+    setAnalysisError(null);
+    setIsAnalyzing(true);
+    setVerification(null);
+    setIsVerifying(false);
+
+    analysisTimer.current = window.setTimeout(() => {
+      analysisTimer.current = null;
+      try {
+        const result = analyzeLog({ text, source, fileName }, {
+          timestampFactory: () => new Date().toISOString(),
+        });
+        const entry = makeHistoryEntry(result, source, fileName);
+        setAnalysis(result);
+        setHistory((current) => [entry, ...current.filter((item) => item.analysisId !== result.id)].slice(0, MAX_HISTORY_ENTRIES));
+        setSessionAnalyses((current) => ({ ...current, [result.id]: { log: text, result, fileName } }));
+        setVerification(null);
+        setIsAnalyzing(false);
+        notify(result.status === "complete"
+          ? `Analysis complete: ${result.findings.length} ${result.findings.length === 1 ? "finding" : "findings"}.`
+          : result.status === "no-match"
+            ? "Analysis complete: no supported diagnostic matched this log."
+            : result.error.message);
+        navigate("/app/analysis");
+      } catch {
+        setIsAnalyzing(false);
+        setAnalysisError("The local analyzer could not complete. Your input is still available; try again.");
+        notify("The local analyzer could not complete. Try again.");
+      }
+    }, 0);
+  };
+
+  const clearActiveSession = () => {
+    if (analysisTimer.current !== null) {
+      window.clearTimeout(analysisTimer.current);
+      analysisTimer.current = null;
+    }
+    if (verificationTimer.current !== null) {
+      window.clearTimeout(verificationTimer.current);
+      verificationTimer.current = null;
+    }
+    setCurrentLog("");
+    setCurrentFileName(undefined);
+    setAnalysis(emptyAnalysis());
+    setAnalysisError(null);
+    setVerification(null);
+    setIsAnalyzing(false);
+    setIsVerifying(false);
+  };
+
+  const handleCompareVerification = (baseline: string, rerun: string) => {
+    if (verificationTimer.current !== null) window.clearTimeout(verificationTimer.current);
+    setIsVerifying(true);
+    setVerification(null);
+    verificationTimer.current = window.setTimeout(() => {
+      verificationTimer.current = null;
+      try {
+        const baselineResult = analyzeLog({ text: baseline, source: "paste" }, { timestampFactory: () => new Date().toISOString() });
+        const rerunResult = analyzeLog({ text: rerun, source: "paste" }, { timestampFactory: () => new Date().toISOString() });
+        const comparison = compareAnalysisResults(baselineResult, rerunResult);
+        setVerification(comparison);
+        setIsVerifying(false);
+        notify(comparison.status === "compared"
+          ? `Comparison ready: ${comparison.outcome}.`
+          : comparison.status === "no-match"
+            ? "Comparison is uncertain because one side has no supported diagnosis."
+            : comparison.error.message);
+      } catch {
+        setIsVerifying(false);
+        notify("The local comparison could not complete. Try again.");
+      }
+    }, 0);
+  };
+
+  const clearHistory = () => {
+    setHistory([]);
+    try {
+      window.localStorage.removeItem(HISTORY_STORAGE_KEY);
+    } catch {
+      // A blocked store is already empty from the application's perspective.
+    }
+    notify("Local analysis history metadata cleared.");
+  };
+
+  const openHistory = (analysisId: string) => {
+    const record = sessionAnalyses[analysisId];
+    if (!record) {
+      notify("Only metadata for this analysis is available. Re-add the original log to reopen it.");
+      return;
+    }
+    setCurrentLog(record.log);
+    setCurrentFileName(record.fileName);
+    setAnalysis(record.result);
+    setAnalysisError(null);
     navigate("/app/analysis");
   };
 
@@ -182,13 +364,23 @@ export function App() {
   const publicProps: PublicPageProps = { onNavigate: navigate, onNotify: notify, onOpenDemo: openDemo };
   const workspaceProps: WorkspacePageProps = {
     analysis,
+    analysisError,
+    history,
+    isAnalyzing,
+    isVerifying,
     currentLog,
+    currentFileName,
     onAnalyze: handleAnalyze,
+    onClearActive: clearActiveSession,
+    onCompareVerification: handleCompareVerification,
+    onClearHistory: clearHistory,
+    onOpenHistory: openHistory,
     onNavigate: navigate,
     onNotify: notify,
     onPatchPreferences: patchPreferences,
     onSetTheme: setTheme,
     preferences,
+    verification,
     theme: preferences.theme,
   };
 

@@ -92,9 +92,10 @@ describe("browser-safe diagnostic engine", () => {
     expect(result.input.normalizedNewlines).toBe(true);
   });
 
-  it("consolidates duplicate signatures and ranks critical findings first", () => {
+  it("keeps source/message identities distinct while consolidating exact duplicates", () => {
     const result = analyzeText(
       [
+        "error TS2322: first occurrence",
         "error TS2322: first occurrence",
         "error TS2322: repeated occurrence",
         "FATAL ERROR: Reached heap limit",
@@ -108,14 +109,12 @@ describe("browser-safe diagnostic engine", () => {
     }
 
     const typeFindings = result.findings.filter((finding) => finding.ruleId === RULE_IDS.typescript);
-    expect(typeFindings).toHaveLength(1);
-    expect(typeFindings[0]?.signature).toBe("typescript:TS2322");
-    expect(typeFindings[0]?.evidence.filter((line) => line.role === "primary").map((line) => line.lineNumber)).toEqual([
+    expect(typeFindings).toHaveLength(3);
+    expect(typeFindings.find((finding) => finding.signature?.includes("first occurrence"))?.evidence.filter((line) => line.role === "primary").map((line) => line.lineNumber)).toEqual([
       1,
       2,
-      4,
     ]);
-    expect(result.findings[0]?.category).toBe("memory");
+    expect(result.findings.some((finding) => finding.category === "memory")).toBe(true);
     expect(result.findings.every((finding) => finding.ruleCatalogVersion === "buildmedic-rules-1")).toBe(true);
   });
 

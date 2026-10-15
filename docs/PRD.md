@@ -1,8 +1,8 @@
 # BuildMedic Product Requirements Document
 
-**Status:** Proposed requirements. The current frontend milestone implements
-the presentation and interaction surfaces with labeled fixture data; live
-analysis behavior remains pending.
+**Status:** The local MVP requirements are implemented for the browser-only
+analysis, verification, safety, and workspace flows. Hosted services,
+automatic remediation, and broader release review remain out of scope.
 
 ## 1. Product summary
 

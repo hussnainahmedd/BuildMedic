@@ -1,4 +1,4 @@
-import type { Finding, FindingConfidence, FindingSeverity } from "../types";
+import type { AnalysisLimit, Finding, FindingConfidence, FindingSeverity } from "../types";
 
 import { sanitizeEvidenceLine } from "../analyzer/normalize";
 import { collectDiagnosticCandidates, RULE_CATALOG_VERSION } from "./rules";
@@ -6,6 +6,8 @@ import type { DiagnosticCandidate, DiagnosticRuleContext } from "./types";
 
 export interface DiagnosticEngineInput {
   readonly lines: readonly string[];
+  /** Optional display copy; matching must continue to use the original lines. */
+  readonly evidenceLines?: readonly string[];
   readonly matchingLines: readonly string[];
 }
 
@@ -17,6 +19,14 @@ export interface DiagnosticEngineOptions {
   readonly contextLines: number;
   readonly maxMatchesPerRule: number;
   readonly createId?: (kind: "finding", seed: string) => string;
+}
+
+export interface DiagnosticAnalysis {
+  readonly findings: readonly Finding[];
+  readonly limitsReached: readonly AnalysisLimit[];
+  readonly omittedFindingCount?: number;
+  readonly cappedRuleIds: readonly string[];
+  readonly evidenceTruncated: boolean;
 }
 
 interface CandidateGroup {
@@ -64,14 +74,19 @@ function compareStrings(left: string, right: string): number {
 }
 
 function compareCandidates(left: DiagnosticCandidate, right: DiagnosticCandidate): number {
-  const severityDifference = SEVERITY_RANK[right.severity] - SEVERITY_RANK[left.severity];
-  if (severityDifference !== 0) {
-    return severityDifference;
-  }
-
   const confidenceDifference = CONFIDENCE_RANK[right.confidence] - CONFIDENCE_RANK[left.confidence];
   if (confidenceDifference !== 0) {
     return confidenceDifference;
+  }
+
+  const causalDifference = causalRank(right.category) - causalRank(left.category);
+  if (causalDifference !== 0) {
+    return causalDifference;
+  }
+
+  const severityDifference = SEVERITY_RANK[right.severity] - SEVERITY_RANK[left.severity];
+  if (severityDifference !== 0) {
+    return severityDifference;
   }
 
   const ruleDifference = compareStrings(left.ruleId, right.ruleId);
@@ -85,6 +100,22 @@ function compareCandidates(left: DiagnosticCandidate, right: DiagnosticCandidate
   }
 
   return left.lineIndex - right.lineIndex;
+}
+
+/** Compiler and dependency causes should precede ambiguous termination summaries. */
+function causalRank(category: DiagnosticCandidate["category"]): number {
+  switch (category) {
+    case "typescript": return 100;
+    case "dependencies": return 95;
+    case "lockfile": return 92;
+    case "package-script": return 90;
+    case "permissions": return 86;
+    case "network": return 84;
+    case "native-module": return 82;
+    case "tooling": return 80;
+    case "memory": return 40;
+    default: return 0;
+  }
 }
 
 function groupCandidates(candidates: readonly DiagnosticCandidate[]): readonly CandidateGroup[] {
@@ -117,6 +148,7 @@ function collectEvidence(
   const primaryIndexes = [...new Set(group.candidates.map((candidate) => candidate.lineIndex))].sort((left, right) => left - right);
   const primarySet = new Set(primaryIndexes);
   const indexes = new Set<number>(primaryIndexes);
+  const evidenceLines = input.evidenceLines ?? input.lines;
   const radius = boundedPositive(contextLines, 1, HARD_MAX_CONTEXT_LINES);
 
   for (const primaryIndex of primaryIndexes) {
@@ -142,15 +174,17 @@ function collectEvidence(
   const selectedIndexes = sortedIndexes.slice(0, boundedPositive(maxEvidenceLines, 6, HARD_MAX_EVIDENCE_LINES));
 
   return selectedIndexes.map((lineIndex) => {
+    const originalLine = input.lines[lineIndex] ?? "";
+    const displayLine = evidenceLines[lineIndex] ?? originalLine;
     const safe = sanitizeEvidenceLine(
-      input.lines[lineIndex] ?? "",
+      displayLine,
       boundedPositive(maxEvidenceLineLength, 512, HARD_MAX_EVIDENCE_LINE_LENGTH),
     );
     return {
       lineNumber: lineIndex + 1,
       text: safe.text,
       role: primarySet.has(lineIndex) ? "primary" : "context",
-      ...(safe.redacted ? { redacted: true } : {}),
+      ...(safe.redacted || displayLine !== originalLine ? { redacted: true } : {}),
     };
   });
 }
@@ -185,17 +219,34 @@ function createFinding(
   };
 }
 
-/** Runs all offline rules, consolidates duplicate signatures, and ranks results. */
-export function analyzeDiagnostics(
+/** Runs all offline rules and reports bounded-work metadata for the analyzer boundary. */
+export function analyzeDiagnosticsDetailed(
   input: DiagnosticEngineInput,
   options: Partial<DiagnosticEngineOptions> = {},
-): readonly Finding[] {
+): DiagnosticAnalysis {
+  const maxMatchesPerRule = boundedPositive(options.maxMatchesPerRule ?? 256, 256, HARD_MAX_MATCHES_PER_RULE);
+  // Probe one extra candidate per rule so hitting a caller limit is observable
+  // without allowing an unbounded detector to run.
+  const probeMaxMatches = Math.min(HARD_MAX_MATCHES_PER_RULE, maxMatchesPerRule + 1);
   const context: DiagnosticRuleContext = {
     lines: input.lines,
     matchingLines: input.matchingLines,
-    maxMatchesPerRule: boundedPositive(options.maxMatchesPerRule ?? 256, 256, HARD_MAX_MATCHES_PER_RULE),
+    maxMatchesPerRule: probeMaxMatches,
   };
-  const groups = groupCandidates(collectDiagnosticCandidates(context));
+  const candidates = collectDiagnosticCandidates(context);
+  const cappedRuleIds = [...new Set(candidates
+    .filter((candidate) => candidate.lineIndex >= 0)
+    .map((candidate) => candidate.ruleId))]
+    .filter((ruleId) => {
+      const count = candidates.filter((candidate) => candidate.ruleId === ruleId).length;
+      return count > maxMatchesPerRule;
+    })
+    .sort(compareStrings);
+  const boundedCandidates = cappedRuleIds.length === 0
+    ? candidates
+    : candidates.filter((candidate) => !cappedRuleIds.includes(candidate.ruleId) ||
+      candidates.filter((entry) => entry.ruleId === candidate.ruleId).indexOf(candidate) < maxMatchesPerRule);
+  const groups = groupCandidates(boundedCandidates);
   const maxFindings = boundedPositive(options.maxFindings ?? 32, 32, HARD_MAX_FINDINGS);
   const normalizedOptions: DiagnosticEngineOptions = {
     ruleCatalogVersion: options.ruleCatalogVersion ?? RULE_CATALOG_VERSION,
@@ -207,7 +258,30 @@ export function analyzeDiagnostics(
     createId: options.createId,
   };
 
-  return groups.slice(0, maxFindings).map((group) => createFinding(group, input, normalizedOptions));
+  const findings = groups.slice(0, maxFindings).map((group) => createFinding(group, input, normalizedOptions));
+  const limitsReached: AnalysisLimit[] = [];
+  if (cappedRuleIds.length > 0) limitsReached.push("matches-per-rule");
+  if (groups.length > maxFindings) limitsReached.push("findings");
+  const evidenceTruncated = groups.some((group) =>
+    group.candidates.length + (normalizedOptions.contextLines * 2) > normalizedOptions.maxEvidenceLines ||
+    group.candidates.some((candidate) => (input.lines[candidate.lineIndex] ?? "").length > normalizedOptions.maxEvidenceLineLength),
+  );
+  if (evidenceTruncated) limitsReached.push("evidence");
+  return {
+    findings,
+    limitsReached,
+    ...(groups.length > maxFindings ? { omittedFindingCount: groups.length - maxFindings } : {}),
+    cappedRuleIds,
+    evidenceTruncated,
+  };
+}
+
+/** Runs all offline rules, consolidates duplicate signatures, and ranks results. */
+export function analyzeDiagnostics(
+  input: DiagnosticEngineInput,
+  options: Partial<DiagnosticEngineOptions> = {},
+): readonly Finding[] {
+  return analyzeDiagnosticsDetailed(input, options).findings;
 }
 
 export const collectFindings = analyzeDiagnostics;

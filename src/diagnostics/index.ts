@@ -1,7 +1,9 @@
 export {
   analyzeDiagnostics,
+  analyzeDiagnosticsDetailed,
   collectFindings,
   type DiagnosticEngineInput,
+  type DiagnosticAnalysis,
   type DiagnosticEngineOptions,
 } from "./engine";
 export {

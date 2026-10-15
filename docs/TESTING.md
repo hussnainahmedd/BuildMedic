@@ -1,8 +1,8 @@
 # BuildMedic Testing Strategy
 
-**Status:** Planned strategy with an initial working suite. The repository now
-has a package manifest, Vitest runner, validation tests, and frontend input
-component tests; broader engine and browser coverage remain pending.
+**Status:** The offline unit and component suite is implemented for the current
+local MVP. Performance measurement, manual accessibility, cross-browser, and
+browser-level automation remain release-hardening work.
 
 ## 1. Testing principles
 
@@ -112,10 +112,12 @@ npm test
 npm run build
 ```
 
-These commands have been run locally for the current frontend milestone. The
-broader engine, browser, accessibility, and performance suites remain planned.
-GitHub Actions runs the Node.js 22 checks on Linux. Docker build verification
-belongs in Linux CI because Docker is unavailable on the local Windows machine.
+At this checkpoint, `npm test` covers the analyzer, diagnostics, verification,
+validation, security boundaries, and critical workspace flows. The latest local
+run must be recorded from the actual command output; do not infer browser,
+accessibility, performance, or Docker results from the unit suite. GitHub
+Actions runs the Node.js 22 checks on Linux. Docker build verification belongs
+in Linux CI because Docker is unavailable on the local Windows machine.
 
 ## 6. Coverage and release gates
 

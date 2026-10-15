@@ -1,7 +1,7 @@
 # BuildMedic Architecture
 
-**Status:** The React presentation modules are implemented; the analyzer,
-diagnostics, and verification engine remain intentionally disconnected.
+**Status:** Implemented local MVP architecture. The analyzer, diagnostics,
+verification engine, and React workspace are connected; no backend is required.
 
 ## 1. Design principles
 
@@ -16,7 +16,7 @@ diagnostics, and verification engine remain intentionally disconnected.
 5. **Small extension surface.** New diagnostic rules should not require changes
    to the UI or to unrelated rule families.
 
-## 2. Planned repository boundaries
+## 2. Repository boundaries
 
 ```text
 src/
@@ -31,8 +31,8 @@ tests/
 docs/             Product, architecture, security, and delivery decisions
 ```
 
-The directory names are structural only at this stage. The eventual module
-names may be refined without changing the public product behavior.
+The directory boundaries are enforced by imports and tests. New rules should
+remain independent of React, storage, and browser APIs.
 
 ## 3. Data flow
 
@@ -60,27 +60,27 @@ filesystem, run a process, or make a network request as part of analysis.
 
 ## 4. Module responsibilities
 
-### Analyzer
+### Analyzer (implemented)
 
-The analyzer accepts validated text and produces a normalized representation.
-It should handle CRLF/LF/CR newlines, preserve original line ordering, and
-extract bounded context around recognized signals. It should not decide how a
-finding is rendered.
+The analyzer accepts text or an `AnalysisRequest`, validates bounded input,
+handles CRLF/LF/CR newlines, preserves original line ordering, extracts bounded
+context, and returns `AnalysisResult`. It never executes or fetches values from
+the log.
 
-### Diagnostics
+### Diagnostics (implemented)
 
-The diagnostics module owns the rule catalog and transforms extracted signals
-into findings. A rule should declare its stable identifier, category, matching
-conditions, evidence requirements, explanation, severity policy, confidence
-policy, and remediation metadata. Rules should be deterministic and safe to
-evaluate on adversarial text.
+The diagnostics module owns the versioned rule catalog and transforms extracted
+signals into findings. Each rule declares a stable identifier, category,
+matching conditions, evidence requirements, explanation, severity/confidence
+policy, and remediation metadata. Rules are deterministic and bounded for
+adversarial text.
 
-### Verification
+### Verification (implemented)
 
-Verification compares structured baseline and rerun results. It should match
-findings by stable rule/signature identity rather than by array position and
-return `resolved`, `persistent`, or `new` states. It must also distinguish “no
-finding detected” from “input could not be analyzed.”
+Verification compares structured baseline and rerun results. It matches by
+normalized rule/signature identity rather than array position and returns
+`resolved`, `persistent`, `new`, or `uncertain` states. It distinguishes no
+supported match from invalid input and never infers that a build passed.
 
 ### Types
 
@@ -90,12 +90,13 @@ line references, suggested actions, and rule-catalog version. Types should
 make invalid states difficult to represent, especially for validation and
 verification outcomes.
 
-### UI
+### UI (implemented)
 
 The React layer presents the input form, analysis state, finding list, evidence
-detail, and verification comparison. It adapts domain results to accessible
-components but must not duplicate matching logic. Loading, empty, invalid,
-no-match, and unexpected-error states are first-class UI states.
+detail, reports, metadata history, and verification comparison. It adapts
+domain results to accessible components but does not own diagnostic matching.
+Loading, empty, invalid, no-match, partial, and unexpected-error states are
+first-class UI states.
 
 ## 5. Component boundaries
 
@@ -110,9 +111,9 @@ no-match, and unexpected-error states are first-class UI states.
 - **Export boundary:** If a summary is copied, it consumes structured results;
   it does not expose unsanitized internal objects by default.
 
-## 6. Conceptual result model
+## 6. Result model
 
-The planned result shape is intentionally serializable:
+The result shape is intentionally serializable:
 
 ```text
 AnalysisResult
@@ -134,8 +135,10 @@ Finding
   verificationHint
 ```
 
-This is a design sketch, not an implemented API or a commitment to exact field
-names. The finalized contract belongs in source-level types and tests.
+The source-level contracts in `src/types/analysis.ts`, `finding.ts`, and
+`verification.ts` are the implementation source of truth. Analysis metadata
+marks capped/partial work so absence of a finding is not presented as
+exhaustive.
 
 ## 7. Technical decisions
 
@@ -166,7 +169,7 @@ production image may be served by a minimal non-root web server. Build-time
 tooling and deployment configuration must not introduce secrets into the
 client bundle. See `docs/SECURITY.md` and `docs/DEPLOYMENT.md`.
 
-## 10. Frontend implementation milestone
+## 10. Frontend implementation
 
 The current frontend keeps the engine seam visible rather than hiding it:
 
@@ -178,8 +181,9 @@ The current frontend keeps the engine seam visible rather than hiding it:
   verification, history, reports, settings, and help surfaces.
 - `src/styles.css` defines the dark-first/light-mode token system, responsive
   layouts, spring-like CSS transitions, focus states, and reduced-motion rules.
-- `src/data/` contains sanitized, explicitly marked demonstration fixtures;
-  these are not analyzer output.
+- `src/data/` contains sanitized, explicitly marked example input and legacy
+  presentation fixtures. The live workspace does not use fixture findings or
+  fixture verification results as analysis output.
 - `src/lib/validation.ts` is a browser-independent input boundary that can be
   reused when the live engine is connected.
 
