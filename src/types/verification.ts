@@ -1,7 +1,7 @@
 import type { Finding } from "./finding";
 import type { ValidationError } from "./validation";
 
-export const VERIFICATION_FINDING_STATES = ["resolved", "persistent", "new"] as const;
+export const VERIFICATION_FINDING_STATES = ["resolved", "persistent", "new", "uncertain"] as const;
 
 export type VerificationFindingState = (typeof VERIFICATION_FINDING_STATES)[number];
 
@@ -9,7 +9,7 @@ export const VERIFICATION_STATUSES = ["compared", "no-match", "invalid"] as cons
 
 export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
 
-export type VerificationOutcome = "improved" | "no-change" | "regressed" | "changed";
+export type VerificationOutcome = "improved" | "no-change" | "regressed" | "changed" | "uncertain";
 
 export interface FindingComparison {
   readonly id: string;
@@ -28,6 +28,8 @@ export interface VerificationSummary {
   readonly resolvedCount: number;
   readonly persistentCount: number;
   readonly newCount: number;
+  /** Number of transitions whose identity/evidence could not be matched confidently. */
+  readonly uncertainCount?: number;
 }
 
 export interface VerificationResultBase {
