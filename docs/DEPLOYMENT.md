@@ -1,7 +1,7 @@
 # BuildMedic Deployment
 
-**Status:** Planned deployment guidance; no application bundle or Docker image
-exists in the current documentation-only repository.
+**Status:** Planned deployment guidance. The frontend bundle can be built
+locally; no Docker image or deployment has been verified yet.
 
 ## 1. Deployment model
 
@@ -44,10 +44,11 @@ build or run result should be reported. GitHub Actions will perform the image
 build on an Ubuntu runner once `Dockerfile`, package manifests, lockfile, and
 build scripts exist.
 
-## 4. Linux CI verification (planned)
+## 4. Linux CI verification
 
-The repository workflow at `.github/workflows/ci.yml` is deliberately gated
-until implementation artifacts exist. It is intended to:
+The repository workflow at `.github/workflows/ci.yml` runs the available Node.js
+checks now and keeps Docker verification gated until the production image
+artifacts exist. It is intended to:
 
 - check out the repository;
 - select Node.js 22 using `.nvmrc`;
@@ -55,10 +56,10 @@ until implementation artifacts exist. It is intended to:
 - run the offline test and production-build scripts; and
 - run `docker build` on the Linux runner.
 
-The workflow currently reports these checks as skipped because the project has
-no package manifest, lockfile, Dockerfile, or application scripts. A future
-change must make the gates real and then record the actual CI run URL or status
-in the release notes; local setup must never claim that CI passed.
+The workflow now runs the Node.js checks because the package manifest, lockfile,
+and scripts exist. It still skips Docker verification until a Dockerfile and
+production runtime are added. Record the actual CI run URL or status in release
+notes; local setup must never claim that CI passed.
 
 ## 5. Configuration and secrets
 

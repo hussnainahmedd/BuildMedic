@@ -1,7 +1,8 @@
 # BuildMedic Product Requirements Document
 
-**Status:** Proposed; documentation only. No requirements in this document are
-implemented yet.
+**Status:** Proposed requirements. The current frontend milestone implements
+the presentation and interaction surfaces with labeled fixture data; live
+analysis behavior remains pending.
 
 ## 1. Product summary
 

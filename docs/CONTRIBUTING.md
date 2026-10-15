@@ -15,12 +15,12 @@ conventions below apply when the application scaffold is introduced.
 
 ## 2. Local setup
 
-The intended toolchain is Node.js 22, TypeScript, React, Vite, and Vitest. The
-package manifest, lockfile, and scripts are not present in this documentation-
-only state. Once they are added, setup will be:
+The toolchain is Node.js 22, TypeScript, React, Vite, and Vitest. Setup is:
 
 ```text
 npm ci
+npm run typecheck
+npm run lint
 npm test
 npm run build
 ```

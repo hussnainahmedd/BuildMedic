@@ -1,7 +1,7 @@
 # Changelog
 
-All notable changes to BuildMedic will be documented here. Until the first
-application release, entries describe repository and documentation changes only.
+All notable changes to BuildMedic will be documented here. The project is
+currently in an unreleased frontend milestone.
 
 ## [Unreleased]
 
@@ -15,9 +15,16 @@ application release, entries describe repository and documentation changes only.
 - Added validation, accessibility, testing, roadmap, contribution, deployment,
   and interface documentation.
 - Clarified that the MVP has no backend API or required external AI provider.
+- Added the React/Vite frontend shell, responsive design system, public product
+  pages, and BuildMedic Lab workspace surfaces.
+- Added frontend-only input validation, local sample log interactions, evidence
+  viewer, simulated verification, history, reports, settings, help, and
+  accessible empty/error states.
+- Added ESLint configuration and frontend component tests alongside validation
+  unit tests.
 
-### Not implemented
+### Intentionally pending
 
-- No application source, package manifest, lockfile, UI, analyzer, diagnostic
-  rules, verification engine, or automated test suite exists yet.
+- The live analyzer, diagnostic rule engine, backend services, persistence,
+  authentication, and external AI integrations are not implemented.
 - No Docker build or deployment has been run or verified.

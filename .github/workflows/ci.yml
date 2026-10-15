@@ -20,15 +20,19 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      - name: Install npm dependencies (future)
+      - name: Install npm dependencies
         if: ${{ hashFiles('package.json') != '' && hashFiles('package-lock.json') != '' }}
         run: npm ci
 
-      - name: Run npm test (future)
+      - name: Run npm test
         if: ${{ hashFiles('package.json') != '' && hashFiles('package-lock.json') != '' }}
         run: npm test
 
-      - name: Run npm build (future)
+      - name: Run npm lint
+        if: ${{ hashFiles('package.json') != '' && hashFiles('package-lock.json') != '' }}
+        run: npm run lint
+
+      - name: Run npm build
         if: ${{ hashFiles('package.json') != '' && hashFiles('package-lock.json') != '' }}
         run: npm run build
 

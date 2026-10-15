@@ -9,8 +9,8 @@ quality or usability work, and **P2** for later expansion.
 ## Phase 0 — Repository foundation (current)
 
 **Priority:** P0
-**Status:** Completed locally for the current scope; no application behavior is
-implemented.
+**Status:** Completed locally. Repository conventions and the documentation
+foundation are in place.
 
 - Establish Node.js 22 pinning and repository conventions.
 - Document product requirements, architecture, security, validation,
@@ -23,16 +23,20 @@ implemented.
 the remaining implementation work without mistaking plans for completed
 features.
 
-## Phase 1 — Reproducible application scaffold
+## Phase 1 — Reproducible application scaffold and frontend demo
 
 **Priority:** P0
-**Status:** Planned.
+**Status:** Frontend milestone completed locally; production Docker runtime and
+Linux Docker verification remain pending.
 
 - Add the TypeScript, React, Vite, and Vitest manifests.
 - Generate and commit the npm lockfile using Node.js 22.
 - Add strict compiler/build/test scripts and the first meaningful offline test.
-- Add a multi-stage Dockerfile and static runtime design.
+- Add the responsive React/Vite public site and BuildMedic Lab workspace.
+- Add frontend validation, demo fixtures, tests, linting, and local preferences.
+- Add a multi-stage Dockerfile and static runtime design. *(Pending.)*
 - Make Linux CI install, test, build, and Docker checks real rather than gated.
+  *(Node checks are active; Docker remains gated.)*
 
 **Exit criteria:** Clean Linux and local Node.js setup commands are documented;
 the first real test and production build pass from the lockfile.

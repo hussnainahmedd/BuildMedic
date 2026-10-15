@@ -1,6 +1,7 @@
 # BuildMedic Architecture
 
-**Status:** Proposed design; no application modules are implemented yet.
+**Status:** The React presentation modules are implemented; the analyzer,
+diagnostics, and verification engine remain intentionally disconnected.
 
 ## 1. Design principles
 
@@ -164,3 +165,25 @@ The browser bundle is the only required runtime for the MVP. A future static
 production image may be served by a minimal non-root web server. Build-time
 tooling and deployment configuration must not introduce secrets into the
 client bundle. See `docs/SECURITY.md` and `docs/DEPLOYMENT.md`.
+
+## 10. Frontend implementation milestone
+
+The current frontend keeps the engine seam visible rather than hiding it:
+
+- `src/components/` contains reusable controls, icons, layout shells, badges,
+  dialogs, forms, and status primitives.
+- `src/pages/public.tsx` contains the public product, documentation, support,
+  privacy, security, and not-found surfaces.
+- `src/pages/workspace.tsx` contains the overview, input, result, log viewer,
+  verification, history, reports, settings, and help surfaces.
+- `src/styles.css` defines the dark-first/light-mode token system, responsive
+  layouts, spring-like CSS transitions, focus states, and reduced-motion rules.
+- `src/data/` contains sanitized, explicitly marked demonstration fixtures;
+  these are not analyzer output.
+- `src/lib/validation.ts` is a browser-independent input boundary that can be
+  reused when the live engine is connected.
+
+Navigation is intentionally implemented without a router dependency: internal
+paths use the History API and render from typed route boundaries. This keeps the
+static MVP small while leaving room for a router if future route-level code
+splitting justifies one.

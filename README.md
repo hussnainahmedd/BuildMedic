@@ -8,20 +8,36 @@ API, account, or backend service.
 
 ## Current status
 
-This repository currently contains **structure and documentation only**. No
-application behavior, UI components, APIs, business logic, dependencies,
-automated checks, Docker image, or deployment has been implemented or verified
-yet.
+The repository now contains a working **frontend demo milestone**: a responsive
+public site, BuildMedic Lab workspace, local input validation, sample log
+interactions, evidence viewer, simulated verification, settings, reports, and
+help surfaces. Demo content is explicitly labeled.
+
+The real diagnostic engine, backend services, authentication, external AI
+integrations, persistence, and Docker image are not implemented in this phase.
+
+Verified locally with Node.js 22: typecheck, lint, 17 Vitest tests, and the
+production build. Docker remains unverified because it is unavailable on the
+Windows development machine.
 
 ## Planned features
 
-The following capabilities are planned and are not implemented in this setup
-phase:
+The following capabilities are implemented as frontend flows or labeled demo
+surfaces:
+
+- Responsive public website and workspace navigation.
+- Paste/upload form with required, MIME, and size validation.
+- Local sample log loading, search, filtering, evidence expansion, copy, and
+  report download interactions.
+- Theme, motion, density, and display preferences stored without raw logs.
+- Simulated analysis and verification results clearly separated from live logic.
+
+The following capabilities remain planned and are not live yet:
 
 - Analyze build inputs, outputs, and metadata.
 - Normalize build failures into useful diagnostic findings.
 - Verify proposed fixes and report verification evidence.
-- Provide a React-based workspace for exploring findings and build history.
+- Connect the React workspace to the real diagnostic engine.
 - Define shared TypeScript types for analyzers, diagnostics, and verification
   results.
 - Support fixture-driven and unit-level validation of the core workflows.
@@ -35,15 +51,16 @@ can evolve independently from its presentation layer:
 - `src/analyzer/` — build inspection and analysis orchestration.
 - `src/diagnostics/` — finding classification, explanations, and reporting.
 - `src/verification/` — checks that confirm whether a build issue was resolved.
-- `src/ui/` — the planned React application and presentation components.
+- `src/components/`, `src/pages/`, and `src/styles.css` — the implemented React
+  presentation layer and design system.
 - `src/types/` — shared TypeScript contracts and domain types.
 - `tests/unit/` — focused tests for individual modules.
 - `tests/fixtures/` — small, repeatable build inputs and expected outcomes.
 - `docs/` — product, architecture, security, quality, and delivery guidance.
 
-The intended flow is analyzer → diagnostics → verification, with shared types
-between the pipeline and UI. The exact module boundaries and persistence
-approach will be defined when implementation begins.
+The intended engine flow is analyzer → diagnostics → verification, with shared
+types between the pipeline and UI. The current frontend uses typed fixture data
+at that seam; no live analyzer is connected.
 
 ## Documentation
 
@@ -61,7 +78,7 @@ approach will be defined when implementation begins.
 
 ## Declared stack
 
-The planned application stack is:
+The application stack is:
 
 - Node.js 22
 - TypeScript
@@ -69,20 +86,27 @@ The planned application stack is:
 - Vite
 - Vitest
 
-No package manifest or lockfile is present by design in this documentation-only
-phase. Dependency installation is intentionally deferred until the application
-scaffold is approved; the lockfile must be generated and committed before
-implementation is considered reproducible.
+Dependencies are declared in `package.json` and pinned in `package-lock.json`.
+The frontend intentionally avoids a component framework and motion dependency;
+its design system uses reusable React components, CSS transitions, and reduced-
+motion support.
 
 ## Setup requirements
 
-For this repository-setup phase, Git and a text editor are sufficient. Future
-development will require Node.js 22.x, preferably managed with a tool that
-honors `.nvmrc`, plus npm bundled with Node.js.
+Development requires Node.js 22.x, preferably managed with a tool that honors
+`.nvmrc`, plus npm bundled with Node.js.
 
-There is currently no install, development-server, test, or build command to
-run. Those commands will be documented here together with the first
-application scaffold.
+```text
+npm ci
+npm run dev
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
+The Vite development server is the recommended way to preview the frontend.
+All listed checks are local Node.js commands; no Docker installation is needed.
 
 ## Roadmap
 
@@ -91,14 +115,15 @@ exit criteria, and explicitly deferred opportunities.
 
 ## Future local, Docker, and CI setup
 
-These are planned steps, not currently available commands or verified checks.
+Local frontend commands are available and verified as described above. Docker
+and Linux CI image verification remain planned/unverified.
 
 ### Local development (planned)
 
 1. Select Node.js 22 using `.nvmrc`.
-2. Install dependencies from the committed lockfile once the manifest exists.
-3. Start the Vite development server with the documented project script.
-4. Run the documented typecheck, unit-test, and production-build scripts.
+2. Install dependencies with `npm ci`.
+3. Start the Vite development server with `npm run dev`.
+4. Run `npm run typecheck`, `npm run lint`, `npm test`, and `npm run build`.
 
 ### Docker (planned)
 
@@ -110,11 +135,11 @@ verify the image after the implementation artifacts exist. See
 
 ### CI (planned)
 
-The repository already contains a future-check workflow at
+The repository contains a Linux CI workflow at
 `.github/workflows/ci.yml`. It targets a Linux runner with Node.js 22 and will
 install from the lockfile, run the project test/build scripts, and verify the
-Docker image once those artifacts exist. Until then, the workflow reports the
-checks as skipped; no current CI result is being claimed.
+Docker image once a Dockerfile exists. Current local checks do not claim Docker
+or GitHub Actions success.
 
 ### Deployment (planned)
 

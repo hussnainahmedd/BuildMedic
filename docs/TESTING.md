@@ -1,7 +1,8 @@
 # BuildMedic Testing Strategy
 
-**Status:** Planned strategy; the repository currently has no package manifest,
-test runner, or application tests.
+**Status:** Planned strategy with an initial working suite. The repository now
+has a package manifest, Vitest runner, validation tests, and frontend input
+component tests; broader engine and browser coverage remain pending.
 
 ## 1. Testing principles
 
@@ -101,20 +102,20 @@ must be clearly separated from the offline unit suite.
 
 ## 5. Planned commands and checks
 
-Once the application scaffold exists, the repository should define one clear
-offline test command and document the exact scripts. The intended checks are:
+The repository defines the following offline checks:
 
 ```text
 npm ci
+npm run typecheck
+npm run lint
 npm test
 npm run build
 ```
 
-These commands are planned, not available or verified in the current
-documentation-only state. GitHub Actions will run the appropriate Node.js 22
-checks on Linux once `package.json`, the lockfile, and scripts exist. Docker
-build verification belongs in Linux CI because Docker is unavailable on the
-local Windows development machine.
+These commands have been run locally for the current frontend milestone. The
+broader engine, browser, accessibility, and performance suites remain planned.
+GitHub Actions runs the Node.js 22 checks on Linux. Docker build verification
+belongs in Linux CI because Docker is unavailable on the local Windows machine.
 
 ## 6. Coverage and release gates
 

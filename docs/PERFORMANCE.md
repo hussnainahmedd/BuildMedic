@@ -1,7 +1,7 @@
 # BuildMedic Performance
 
-**Status:** Proposed budgets and measurement plan; no benchmark has been run
-for the current documentation-only repository.
+**Status:** Proposed budgets and measurement plan. The frontend is implemented,
+but the documented performance benchmark has not been run yet.
 
 ## 1. Performance goals
 

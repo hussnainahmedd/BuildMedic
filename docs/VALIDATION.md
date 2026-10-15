@@ -1,7 +1,7 @@
 # BuildMedic Validation and Accessibility
 
-**Status:** Proposed UI and input-validation specification; no form is
-implemented yet.
+**Status:** Proposed specification with a working frontend input flow. Full
+engine integration and complete accessibility verification remain pending.
 
 ## 1. Validation model
 
