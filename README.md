@@ -1,14 +1,17 @@
 # BuildMedic
 
-BuildMedic is a planned Frontier Buildathon project for understanding build
-health, turning build failures into actionable diagnostics, and giving teams a
-clear path from detection to verification.
+BuildMedic is an offline-first, browser-based developer tool for turning Node.js
+build failures into actionable diagnostics. It is being developed for the
+OmniRush Frontier Buildathon 2026 in the Developer Tools & Open Source track.
+The planned MVP keeps log analysis local and does not require an external AI
+API, account, or backend service.
 
 ## Current status
 
-This repository currently contains **repository setup only**. No application
-behavior, UI components, APIs, business logic, dependencies, or automated
-checks have been implemented or verified yet.
+This repository currently contains **structure and documentation only**. No
+application behavior, UI components, APIs, business logic, dependencies,
+automated checks, Docker image, or deployment has been implemented or verified
+yet.
 
 ## Planned features
 
@@ -22,6 +25,7 @@ phase:
 - Define shared TypeScript types for analyzers, diagnostics, and verification
   results.
 - Support fixture-driven and unit-level validation of the core workflows.
+- Keep user logs in the browser and treat all log content as untrusted text.
 
 ## Intended architecture
 
@@ -35,11 +39,25 @@ can evolve independently from its presentation layer:
 - `src/types/` — shared TypeScript contracts and domain types.
 - `tests/unit/` — focused tests for individual modules.
 - `tests/fixtures/` — small, repeatable build inputs and expected outcomes.
-- `docs/` — architecture notes, decisions, and future operational guidance.
+- `docs/` — product, architecture, security, quality, and delivery guidance.
 
 The intended flow is analyzer → diagnostics → verification, with shared types
 between the pipeline and UI. The exact module boundaries and persistence
 approach will be defined when implementation begins.
+
+## Documentation
+
+- [Product requirements](docs/PRD.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Security](docs/SECURITY.md)
+- [Performance](docs/PERFORMANCE.md)
+- [Validation and accessibility](docs/VALIDATION.md)
+- [Testing strategy](docs/TESTING.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Contributing](docs/CONTRIBUTING.md)
+- [Deployment](docs/DEPLOYMENT.md)
+- [API and future interfaces](docs/API.md)
+- [Changelog](CHANGELOG.md)
 
 ## Declared stack
 
@@ -51,14 +69,16 @@ The planned application stack is:
 - Vite
 - Vitest
 
-No package manifest or lockfile is present by design; dependency installation
-is intentionally deferred until the application scaffold is approved.
+No package manifest or lockfile is present by design in this documentation-only
+phase. Dependency installation is intentionally deferred until the application
+scaffold is approved; the lockfile must be generated and committed before
+implementation is considered reproducible.
 
 ## Setup requirements
 
 For this repository-setup phase, Git and a text editor are sufficient. Future
 development will require Node.js 22.x, preferably managed with a tool that
-honors `.nvmrc`.
+honors `.nvmrc`, plus npm bundled with Node.js.
 
 There is currently no install, development-server, test, or build command to
 run. Those commands will be documented here together with the first
@@ -66,13 +86,8 @@ application scaffold.
 
 ## Roadmap
 
-1. Establish the application scaffold and dependency policy.
-2. Define shared domain types and analyzer input/output contracts.
-3. Implement analyzer and diagnostics workflows.
-4. Add verification checks and fixture-driven coverage.
-5. Build the React/Vite workspace.
-6. Add integration coverage, packaging, and operational documentation.
-7. Finalize CI, Docker, and deployment workflows.
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for phased milestones, priorities,
+exit criteria, and explicitly deferred opportunities.
 
 ## Future local, Docker, and CI setup
 
@@ -87,9 +102,11 @@ These are planned steps, not currently available commands or verified checks.
 
 ### Docker (planned)
 
-A future `Dockerfile` will pin a Node.js 22 base image, install from the
-committed lockfile, build the application, and define the production runtime.
-The image build and run commands will be added here when that artifact exists.
+A future multi-stage `Dockerfile` will pin a Node.js 22 base image, install from
+the committed lockfile, build the application, and define a minimal production
+runtime. Docker is unavailable on the local Windows machine; Linux CI will
+verify the image after the implementation artifacts exist. See
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ### CI (planned)
 
