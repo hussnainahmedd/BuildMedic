@@ -1,0 +1,20 @@
+# Dependencies and package-manager output
+node_modules/
+.npm/
+
+# Build and tooling output
+dist/
+build/
+.vite/
+.cache/
+coverage/
+
+# Logs and local environment files
+*.log
+.env
+.env.*
+!.env.example
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
