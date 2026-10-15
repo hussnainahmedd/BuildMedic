@@ -2,8 +2,8 @@
 
 **Status:** The frontend bundle and multi-stage Dockerfile are implemented.
 Docker verification is performed in Linux CI because Docker is unavailable on
-the Windows development machine; the current commit's CI result is the source
-of truth for image verification.
+the Windows development machine. Run `38806248540` passed the image build,
+container startup, `/health` check, and homepage smoke check.
 
 ## 1. Deployment model
 

@@ -26,8 +26,9 @@ features.
 ## Phase 1 — Reproducible application scaffold and frontend demo
 
 **Priority:** P0
-**Status:** Frontend milestone and Docker production runtime are implemented
-locally; Linux Docker verification is delegated to GitHub Actions.
+**Status:** Frontend milestone and Docker production runtime are implemented;
+Linux Docker build, startup, health, and homepage smoke checks passed in
+GitHub Actions for the current delivery commit.
 
 - Add the TypeScript, React, Vite, and Vitest manifests.
 - Generate and commit the npm lockfile using Node.js 22.

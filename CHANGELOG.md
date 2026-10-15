@@ -22,9 +22,14 @@ currently in an unreleased frontend milestone.
   accessible empty/error states.
 - Added ESLint configuration and frontend component tests alongside validation
   unit tests.
+- Added a multi-stage Node.js 22 Dockerfile, non-root static server, Docker
+  health check, `.dockerignore`, and `.env.example`.
+- Made Linux CI fail on missing build artifacts and verify container startup,
+  `/health`, and rendered homepage content.
 
 ### Intentionally pending
 
 - The live analyzer, diagnostic rule engine, backend services, persistence,
   authentication, and external AI integrations are not implemented.
-- No Docker build or deployment has been run or verified.
+- Docker has not been run locally; Docker build and HTTP smoke verification
+  passed in GitHub Actions run `38806248540`.
