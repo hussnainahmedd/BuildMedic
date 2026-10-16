@@ -7,8 +7,8 @@ were preserved. All log/credential-looking QA inputs are synthetic.
 ## Release decision
 
 **Conditional release candidate for the bounded local MVP / Buildathon review.**
-Local functional and regression checks pass. Linux/container verification of
-this revision is pending the release CI run; its receipt will be recorded below.
+Local functional/regression checks and the independent Linux/container/browser
+run pass. The verified source and immutable CI receipt are recorded below.
 Do not describe this as unconditional production, performance, security or WCAG
 certification. Large-log UI pauses, total peak memory and manual assistive-tech
 review remain material limitations.
@@ -30,9 +30,14 @@ review remain material limitations.
 | Dependency advisories | PASS | `npm audit --audit-level=high`: zero reported vulnerabilities, including development dependencies |
 | Pipeline benchmark | PASS as measurement | Both benchmark tests pass; five requested sizes plus 25 MiB measured; see tables below |
 | Browser benchmark | PASS as measurement | Genuine production Chromium worker/UI, one warmup plus three samples per size; no performance assertions weakened |
-| Current Linux clean rebuild / Docker / container browser QA | PENDING | New CI builds both images and tests browsers against the separate non-root production container |
-| Local Docker invocation | BLOCKED | Docker executable unavailable on Windows; use verified Linux CI receipt instead once complete |
+| Linux clean rebuild / Docker / container browser QA | PASS | Run `38914960876` at `efaa547`: both images built; non-root runtime, HTTP smoke and all 42 real-browser scenarios passed |
+| Local Docker invocation | BLOCKED locally | Docker executable unavailable on Windows; independent Linux verification passed |
 | Total peak-memory budget / manual screen reader / physical devices | UNVERIFIED | Not established by DOM tests, viewport emulation, axe or UI-heap snapshots |
+
+No automated assertion remains failing at the verified source checkpoint.
+Performance signoff is **not complete**: pure timing observations are promising,
+but the 10 MiB browser round-trip and UI pauses remain unsuitable for an
+unqualified instant/smooth large-log claim.
 
 ### Genuine user behavior exercised
 
@@ -52,7 +57,8 @@ review remain material limitations.
   storage recovery. No external requests observed in the normal workflow case.
 
 Browsers: Playwright **1.64.1** managed Chromium **156.0.8078.4**, Firefox **157.0**,
-WebKit **27.2** on Windows. WebKit is not proof of branded Safari/iOS compatibility.
+WebKit **27.2** on Windows; the three-engine suite also passed in the Linux QA
+container against the separate production image. WebKit is not proof of branded Safari/iOS compatibility.
 The suite uses compiled production assets, not Vite or fixture-only DOM success.
 
 ## Repairs and regression evidence
@@ -81,7 +87,8 @@ audit, benchmarks, runtime startup/HTTP and all functional browser scenarios,
 but four axe cases sampled intermediate theme/opacity animation colors. The
 harness now waits for fonts and finite animations, retaining every assertion;
 that failed run is not presented as a release pass. CI Actions were also moved
-to commit-pinned v5 releases after a Node-20 deprecation warning.
+to commit-pinned checkout/setup v5 and artifact v6 releases after Node-20
+deprecation warnings. The application's own runtime remains Node 22.22.3.
 
 ## Measured performance
 
@@ -174,17 +181,28 @@ No Vercel/Render action, commercial video, submission or live-user data was used
 ## Evidence, revisions and remaining signoff
 
 - Code checkpoints: `e4a1975` (accessible workflows), `a26d598` (diagnostic fast
-  paths). Final browser/CI source checkpoint and run receipt: **pending push**.
-- Local screenshots/results: `.cache/browser-results/`, including
+  paths), `fe089d9` (browser feedback/focus), `779cba9` (browser QA) and
+  **`efaa54797c6ccf8872ee5593bc6a3ea6743e39d1`** (settled accessibility / verified
+  release source).
+- **PASS:** [Linux/container/browser CI 38914960876](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38914960876)
+  at that source SHA. All job steps succeeded; downloaded results explicitly
+  report 42 expected, 0 skipped, 0 unexpected and 0 flaky browser cases.
+  The final documentation/CI-action receipt commit does not change application
+  code; its exact repository SHA and final CI URL are returned in the delivery
+  summary. Locally, `git rev-parse HEAD` identifies that final report commit.
+- Downloaded Linux screenshots/results: `.cache/ci-release-evidence/`, including
   `release-production-module--f1392-reports-and-private-history-chromium/desktop-analysis.png`
   and `release-desktop-tablet-and-0f6cd-gation-dialogs-and-controls-chromium/workspace-390.png`.
-  Desktop and narrow-mobile captures were visually inspected; this is not a
+  Windows and downloaded Linux desktop/narrow-mobile captures were visually inspected; this is not a
   pixel-perfect screenshot comparison or exhaustive visual review.
 - Browser raw measurements:
   `.cache/browser-performance/performance-measures-actua-c01a4--trips-and-result-rendering-chromium/measurements.json`.
-- These generated files are ignored by Git and contain synthetic data only.
+- Original local runs write `.cache/browser-results/`; the downloaded Linux
+  artifact above survives later local reruns. These generated files are ignored
+  by Git and contain synthetic data only.
   Re-running the command replaces local results. CI retains its own
-  `browser-qa-evidence` artifact for 14 days; persistent source evidence is the
+  [`browser-qa-evidence` artifact](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38914960876/artifacts/12051449401)
+  for 14 days; persistent source evidence is the
   committed harness and this report, not a claim that local cache is in Git.
 - Outstanding signoff: total-memory/low-memory-device profiling; robust browser
   p95 samples and native textarea/rendering pauses; NVDA/VoiceOver or equivalent
@@ -193,4 +211,4 @@ No Vercel/Render action, commercial video, submission or live-user data was used
   No penetration test, exhaustive secret detection, container-CVE audit or
   browser-baseline memory guarantee was performed.
 - Historical baseline Linux/Docker CI `38898094995` passed at `ae7792f`. It does
-  not verify the new revision; current CI must independently pass before release.
+  not verify the new revision; the independent successful receipt above does.

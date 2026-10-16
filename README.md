@@ -224,6 +224,10 @@ smoke plus Chromium/Firefox/WebKit checks against it. Synthetic screenshots and
 failure traces are retained for 14 days. Any missing file or failing assertion
 fails the workflow. Current revision receipts are in `docs/QA-RELEASE.md`.
 
+Final QA source `efaa547` passed
+[Linux/container/browser CI 38914960876](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38914960876),
+including all 42 production-browser scenarios with zero skipped/flaky cases.
+
 Hardening code `4ae575e` (included in `3f8318f`) passed
 [Linux/Docker CI run 38897847991](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38897847991).
 This historical run verified build and HTTP delivery only; it predates browser QA.

@@ -29,8 +29,13 @@ currently in an unreleased local-MVP checkpoint.
   dependency audit, benchmark and retained synthetic evidence. Production
   runtime remains non-root and free of test/browser dependencies.
 - Stabilized static accessibility scans after finite theme/dialog animations
-  (no rules disabled), and replaced deprecated Node-20 Actions with commit-pinned
-  v5 Actions after the first Linux/browser run exposed the timing issue.
+  (no rules disabled), and pinned checkout/setup v5 and artifact v6 Actions after
+  Linux CI exposed timing and deprecated action-runtime issues.
+- Verified final QA source `efaa547` with
+  [Linux/container/browser CI 38914960876](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38914960876):
+  180 unit/DOM tests, checks/audit/benchmark, both Docker builds, non-root HTTP
+  smoke and 42 browser scenarios. No skipped or flaky browser cases. Local Docker,
+  total peak memory and manual assistive-technology signoff remain disclosed.
 
 ### Added
 

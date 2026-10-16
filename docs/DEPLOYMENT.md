@@ -9,6 +9,10 @@ production HTTP/worker-asset smoke. That historical run did not establish browse
 execution. The final QA workflow additionally checks Chromium/Firefox/WebKit
 against the non-root production container; current revision receipts and gaps
 are in [QA-RELEASE.md](QA-RELEASE.md). No public deployment has been performed.
+Final QA source `efaa547` passed
+[CI 38914960876](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38914960876),
+including clean Linux rebuild, both Docker targets, non-root startup/HTTP and
+all 42 production-container browser scenarios.
 
 ## 1. Deployment model
 
