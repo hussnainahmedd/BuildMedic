@@ -1,5 +1,9 @@
 # BuildMedic — final QA and release hardening
 
+**Historical checkpoint:** the newer Vercel/Render routing, narrow-layout and
+WebKit CSP repairs and their live receipts are in [PRODUCTION-QA.md](PRODUCTION-QA.md).
+The counts and limits below remain the evidence for the earlier release source.
+
 Date: **2026-10-16**. Baseline: `ae7792f`. Scope: existing local MVP; no redesign,
 hosted feature, deployment, video or submission. Git history and working flows
 were preserved. All log/credential-looking QA inputs are synthetic.

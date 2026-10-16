@@ -16,7 +16,9 @@ test("all React routes support direct requests, trailing slashes and refresh; un
     expect(response?.status(), route).toBe(200);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expect(page).toHaveTitle(/BuildMedic/);
-    expect((await page.reload())?.status(), `${route} refresh`).toBe(200);
+    // Firefox exposes Vercel's valid conditional-document 304 on reload.
+    // The rendered route must still work; a 404/redirect/error is never accepted.
+    expect([200, 304], `${route} refresh`).toContain((await page.reload())?.status());
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     if (route !== "/") {
       const slash = await request.get(`${route}/`);
@@ -28,7 +30,7 @@ test("all React routes support direct requests, trailing slashes and refresh; un
     expect((await page.goto(route))?.status()).toBe(200);
     await expect(page.locator(".not-found-page")).toContainText("404");
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    expect((await page.reload())?.status()).toBe(200);
+    expect([200, 304], `${route} refresh`).toContain((await page.reload())?.status());
     await expect(page.locator(".not-found-page")).toContainText("404");
   }
 });

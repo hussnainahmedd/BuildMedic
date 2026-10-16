@@ -99,9 +99,9 @@ coverage; unknown secret formats can still escape detection. Review exports.
   toolchain.
 
 The production server and Vercel configuration send an aligned restrictive CSP
-including `worker-src 'self'`,
-rejects unsupported methods, and returns 404 for missing assets rather than SPA
-HTML. The host must provide HTTPS; HTTP smoke checks do not verify browser CSP
+including `worker-src 'self'`. The server rejects unsupported methods, and both
+hosts return 404 for missing assets rather than SPA HTML. The host must provide
+HTTPS; HTTP smoke checks do not verify browser CSP
 enforcement. Same-origin extensions, developer tools, and compromised browsers
 are not isolation boundaries this application can control. The production
 browser suite observed no external requests in its normal local analysis/export

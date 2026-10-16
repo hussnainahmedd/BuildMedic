@@ -12,6 +12,7 @@ are in [QA-RELEASE.md](QA-RELEASE.md). Production hosts are
 [Vercel](https://build-medic.vercel.app/) and
 [Render](https://buildmedic.onrender.com/); see section 7 for their configuration
 and revision checks. Historical CI results below are not evidence for a newer commit.
+The production repair receipt is in [PRODUCTION-QA.md](PRODUCTION-QA.md).
 Final QA source `efaa547` passed
 [CI 38914960876](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38914960876),
 including clean Linux rebuild, both Docker targets, non-root startup/HTTP and
