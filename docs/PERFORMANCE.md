@@ -1,9 +1,67 @@
 # BuildMedic Performance
 
-**Status:** Local synthetic analysis baseline measured; browser rendering,
-worker transport latency, and peak memory remain unmeasured.
+**Status:** Pure-pipeline and production Chromium worker/UI measurements are
+available. Total browser/worker peak memory remains unverified; input/cache byte
+limits are not a heap-memory budget. See [final QA](QA-RELEASE.md).
 
-## Measured baseline (2026-10-16)
+## Final QA pipeline measurement (2026-10-16)
+
+Command: `npm run benchmark`. Node.js 22.22.3, Windows x64, Intel Core i7-8665U;
+same committed synthetic ASCII workload, one warmup, up to 30 timed samples and
+a 15-second cutoff per case. This run was not concurrent with the test/browser
+suites. The initial QA benchmark overlapped other checks and is not used as a
+controlled before/after comparison.
+
+| Input | Median | p95 | Timed samples |
+| --- | ---: | ---: | ---: |
+| 10 KiB | 2.11 ms | 5.31 ms | 30 |
+| 100 KiB | 14.04 ms | 19.09 ms | 30 |
+| 1 MiB | 138.44 ms | 223.18 ms | 30 |
+| 5 MiB | 736.72 ms | 989.20 ms | 19 (cutoff) |
+| 10 MiB | 1361.52 ms | 1627.99 ms | 10 (cutoff) |
+| 25 MiB | 3823.16 ms | 4828.57 ms | 3 (cutoff) |
+
+The observed 1 MiB p95 is below 250 ms. The observed 10 MiB value is below 2 s,
+but ten samples do not establish a reliable tail estimate or a cross-device
+performance guarantee. The maximum-size case remains expensive. The harness
+also checked dense no-match input and viewer preparation; no assertions were
+relaxed to obtain these measurements.
+
+### Proven bottlenecks and focused repair
+
+`npm run benchmark -- tests/performance/profile.perf.ts` profiles each stage and
+rule on the same 1 MiB workload (one warmup, ten timed samples per stage).
+Before/after warmed medians from adjacent isolated profiling runs:
+
+| Stage | Before | After |
+| --- | ---: | ---: |
+| All diagnostic rules | 114.85 ms | 44.32 ms |
+| Missing CLI detector | 56.58 ms | 0.76 ms |
+| Lockfile detector | 20.80 ms | 4.85 ms |
+| Full pipeline | 228.10 ms | 143.54 ms |
+
+The missing-CLI command-name regex retried at each character of ordinary long
+lines. Both supported spellings require `not found`, so a necessary-condition
+guard avoids that work without changing matches. Lockfile matching allocated
+and searched four-line context even when the primary line had no lockfile cue;
+the existing cue is now checked first. Evidence, identities, severity, limits,
+redaction and verification behavior are unchanged. Seven new domain regressions
+and the existing domain/comparison suites passed. Host/JIT/GC variation still
+affects timings; do not generalize the full-pipeline percentage to every log.
+
+### Browser measurement command and limits
+
+After building and installing project-local browsers, run
+`npm run benchmark:browser`. It uses the real production worker and file-upload
+UI at all five requested sizes, with one warmup plus three samples per size.
+It records worker round-trip (including cloning), message-to-result-DOM timing,
+16 ms UI heartbeat gaps and optional Chromium UI-heap snapshots in
+`.cache/browser-performance/`. Snapshots exclude worker/DOM/native allocations;
+they cannot validate the roughly 3× input peak-memory goal. This small browser
+sample is observational and does not prove a p95 target. Final numbers are in
+the release QA report.
+
+## Previous hardening baseline (2026-10-16)
 
 Run `npm run benchmark` separately from `npm test`. The committed harness uses
 synthetic ASCII logs, checks correctness, warms each case once, and takes up to

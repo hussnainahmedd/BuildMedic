@@ -14,6 +14,10 @@ currently in an unreleased local-MVP checkpoint.
   shortcuts, form error focus, disclosure states, and input-mode semantics.
 - Retained the existing design and local diagnostic pipeline; added 31 focused
   UI regressions. Verified 173 unit/DOM tests and production Chromium checks.
+- Profiled and removed unnecessary missing-CLI regex work and lockfile lookahead;
+  retained matching semantics and added seven domain regressions. The isolated
+  1 MiB/10 MiB pipeline run observed p95 223/1628 ms; the latter has only ten
+  samples. Full method, sample counts and limitations are in `docs/PERFORMANCE.md`.
 
 ### Added
 

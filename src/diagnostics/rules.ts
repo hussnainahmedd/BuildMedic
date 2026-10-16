@@ -306,12 +306,15 @@ function lockfileRule(context: DiagnosticRuleContext): readonly DiagnosticCandid
     }
     const exactCode = /\b(?:ERR_PNPM_OUTDATED_LOCKFILE|YN0028)\b/i.test(line);
     const lockCue = /\b(?:npm\s+ci|lockfile|lock file|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|frozen-lockfile|--immutable|ERR_PNPM_OUTDATED_LOCKFILE|YN0028)\b/i.test(line);
+    // Nearby text can complete a cue, never create one. Avoid allocating and
+    // rescanning four lines for every unrelated progress message.
+    if (!lockCue) return undefined;
     const nearby = boundedNearbyText(context, lineIndex);
     const npmCiMismatch = /\bnpm\s+ci\b[^\n]{0,500}\b(?:package(?:\.json)?|lock|npm-shrinkwrap\.json)[^\n]{0,500}\b(?:in sync|synchron|only install)/i.test(nearby);
     const lockMismatch = /(?:lockfile|lock file|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml)[^\n]{0,500}(?:not\s+(?:in\s+sync|up[ -]?to[ -]?date)|out\s+of\s+date|outdated|mismatch|does\s+not\s+satisfy|would have been modified|needs?\s+(?:to be\s+)?updated)/i.test(nearby);
     const frozenFailure = /(?:frozen-lockfile|--immutable)[^\n]{0,500}(?:error|fail|modified|outdated|update)/i.test(nearby);
 
-    if (!lockCue || (!exactCode && !npmCiMismatch && !lockMismatch && !frozenFailure)) {
+    if (!exactCode && !npmCiMismatch && !lockMismatch && !frozenFailure) {
       return undefined;
     }
 
@@ -364,7 +367,9 @@ function missingScriptRule(context: DiagnosticRuleContext): readonly DiagnosticC
 
 function missingCliRule(context: DiagnosticRuleContext): readonly DiagnosticCandidate[] {
   return collect(context, (line, lineIndex) => {
-    if (isSourceStatement(line)) {
+    // Both accepted command spellings require this exact phrase. The bounded
+    // command-name regex otherwise retries at every character in a long line.
+    if (!/not\s+found/i.test(line) || isSourceStatement(line)) {
       return undefined;
     }
     const commandMissing = line.match(/(?:command\s+)?["']?([A-Za-z0-9_.:@/+~-]{1,80})["']?\s*:\s*(?:command\s+)?not\s+found/i)
