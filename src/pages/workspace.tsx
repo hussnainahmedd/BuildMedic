@@ -158,6 +158,10 @@ function PartialAnalysisNotice({ analysis }: { analysis: AnalysisResult }) {
   return <div className="analysis-partial-notice" role="status"><Icon name="info" size={14} /> {detail} Review the visible evidence as a bounded result, not an exhaustive log report.</div>;
 }
 
+function LargeLogNotice({ warning }: { warning: boolean }) {
+  return warning ? <div className="analysis-partial-notice" role="status"><Icon name="info" size={14} /> Large log: local processing may take several seconds and use significant memory. You can cancel processing; reducing the log may help on smaller devices.</div> : null;
+}
+
 function safeEvidenceText(text: string): string {
   return sanitizeEvidenceLine(text, 2048).text;
 }
@@ -523,6 +527,7 @@ export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnaly
           />
           {fileError ? <div className="field-error" id="file-read-error" role="alert"><Icon name="circle-alert" size={14} /> {fileError}</div> : null}
           {analysisError ? <div className="field-error" role="alert"><Icon name="circle-alert" size={14} /> {analysisError}</div> : null}
+          <LargeLogNotice warning={!inspection.pending && validation.valid && validation.warning} />
           {isAnalyzing ? <div aria-live="polite" className="demo-status-row"><span className="status-pulse" />Analyzing with the local rule catalog…</div> : null}
           {isReading ? <div role="status" className="demo-status-row">Reading and validating local text file…</div> : null}
           <div className="input-card-actions">
@@ -951,12 +956,14 @@ export function VerificationPage({ onNavigate, onNotify, onCompareVerification, 
           <div className="verification-input-head"><span className="verification-step">01</span><div><span className="panel-kicker">Baseline</span><h2>Before the fix</h2></div><Badge tone="neutral">Current log</Badge></div>
           <TextareaField disabled={isVerifying} aria-busy={isVerifying || baselineInspection.pending} aria-keyshortcuts="Control+Enter Meta+Enter" error={touched && !baselineInspection.pending ? baselineError : undefined} id="baseline-log" label="Original build log" onBlur={() => setTouched(true)} onChange={(event) => changeInputs(event.target.value, rerun)} onKeyDown={handleCompareShortcut} value={baseline} />
           <span className="verification-input-meta"><Icon name="file-code" size={13} /> {baselineInspection.pending ? "Checking input locally…" : `${baselineInspection.lineCount} lines · ${formatBytes(baselineInspection.byteCount)}`}</span>
+          <LargeLogNotice warning={!baselineInspection.pending && baselineValidation.valid && baselineValidation.warning} />
         </Card>
         <div className="verification-connector" aria-hidden="true"><span>compare</span><Icon name="arrow-right" size={18} /></div>
         <Card className="verification-input-card">
           <div className="verification-input-head"><span className="verification-step verification-step-accent">02</span><div><span className="panel-kicker">Rerun</span><h2>After the fix</h2></div><Badge tone="accent">New input</Badge></div>
           <TextareaField disabled={isVerifying} aria-busy={isVerifying || rerunInspection.pending} aria-keyshortcuts="Control+Enter Meta+Enter" error={touched && !rerunInspection.pending ? rerunError : undefined} id="rerun-log" label="Rerun build log" onBlur={() => setTouched(true)} onChange={(event) => changeInputs(baseline, event.target.value)} onKeyDown={handleCompareShortcut} value={rerun} />
           <span className="verification-input-meta"><Icon name="file-code" size={13} /> {rerunInspection.pending ? "Checking input locally…" : `${rerunInspection.lineCount} lines · ${formatBytes(rerunInspection.byteCount)}`}</span>
+          <LargeLogNotice warning={!rerunInspection.pending && rerunValidation.valid && rerunValidation.warning} />
         </Card>
       </div>
       <div className="verification-actions"><Button disabled={isVerifying || pending} onClick={compare} size="lg" icon="shield-check">{isVerifying ? "Comparing…" : "Compare findings"}</Button>{isVerifying && onCancelVerification ? <Button onClick={onCancelVerification} variant="quiet" icon="x">Cancel comparison</Button> : null}</div>
@@ -1099,7 +1106,7 @@ export function HelpPage({ onNavigate, onNotify, analysis, analysisError, isAnal
 
   return (
     <div className="workspace-page help-page">
-      <WorkspacePageHeader actions={<Button onClick={() => setShortcutsOpen(true)} variant="secondary" icon="command">Keyboard shortcuts</Button>} description="A short guide to the real local analyzer, evidence surfaces, and comparison labels in BuildMedic Lab." eyebrow="System / help" title="Find your way around." />
+      <WorkspacePageHeader actions={<Button onClick={(event) => { event.currentTarget.focus(); setShortcutsOpen(true); }} variant="secondary" icon="command">Keyboard shortcuts</Button>} description="A short guide to the real local analyzer, evidence surfaces, and comparison labels in BuildMedic Lab." eyebrow="System / help" title="Find your way around." />
       <div className="help-layout">
         <Card className="help-getting-started"><div className="help-orbit" aria-hidden="true"><span /><span /><span /><span /></div><span className="eyebrow">First pass</span><h2>Start with a local log.</h2><p>Open New analysis, paste or upload text, then follow the returned evidence into the viewer or verification surface.</p><div className="help-steps"><div><span>01</span><strong>Paste or upload</strong></div><div><span>02</span><strong>Analyze log</strong></div><div><span>03</span><strong>Review evidence</strong></div></div><Button onClick={() => onNavigate("/app/new-analysis")} icon="arrow-right" iconPosition="right">Start an analysis</Button></Card>
         <Card className="help-faq-card"><div className="panel-heading"><div><span className="panel-kicker">Common questions</span><h2>Stay oriented</h2></div><Icon name="circle-help" size={18} /></div><div className="faq-list">{questions.map((item) => <div className={`faq-item${openQuestion === item.id ? " open" : ""}`} key={item.id}><button aria-expanded={openQuestion === item.id} aria-controls={`${faqId}-${item.id}-answer`} onClick={() => setOpenQuestion((current) => current === item.id ? null : item.id)} type="button"><span>{item.question}</span><Icon name={openQuestion === item.id ? "chevron-down" : "chevron-right"} size={15} /></button><p hidden={openQuestion !== item.id} id={`${faqId}-${item.id}-answer`}>{item.answer}</p></div>)}</div></Card>

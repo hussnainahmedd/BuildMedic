@@ -273,6 +273,11 @@ it("keeps light muted/accent text, tinted badges and primary buttons above 4.5:1
   }
   const badgeBackground = rgb(token("bg")).map((value, index) => value * 0.9 + rgb(token("accent"))[index]! * 0.1);
   expect(contrast(rgb(token("accent")), badgeBackground)).toBeGreaterThanOrEqual(4.5);
+  for (const badge of ["accent", "blue"]) {
+    // Populated overview/report badges can be nested on tinted/strong panels.
+    const nested = rgb(token("surface-strong")).map((value, index) => value * 0.8 + rgb(token(badge))[index]! * 0.2);
+    expect(contrast(rgb(token(badge)), nested)).toBeGreaterThanOrEqual(4.5);
+  }
   // Settings nests a 10% success badge in a 5% success-tinted note.
   const successBackground = rgb(token("surface")).map((value, index) => value * 0.855 + rgb(token("green"))[index]! * 0.145);
   expect(contrast(rgb(token("green")), successBackground)).toBeGreaterThanOrEqual(4.5);

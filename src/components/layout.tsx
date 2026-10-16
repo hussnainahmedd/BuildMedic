@@ -105,7 +105,7 @@ export function PublicLayout({ children, path, onNavigate, theme, onToggleTheme 
               aria-expanded={mobileOpen}
               icon={mobileOpen ? "x" : "menu"}
               label={mobileOpen ? "Close navigation" : "Open navigation"}
-              onClick={() => setMobilePath(mobileOpen ? null : path)}
+              onClick={(event) => { event.currentTarget.focus(); setMobilePath(mobileOpen ? null : path); }}
             />
           </div>
         </div>
@@ -369,7 +369,7 @@ export function WorkspaceShell({ children, path, onNavigate, theme, onToggleThem
       <div className="workspace-main">
         <header className="workspace-topbar">
           <div className="workspace-topbar-left">
-            <IconButton aria-controls="workspace-sidebar" aria-expanded={sidebarOpen} aria-haspopup="dialog" className="sidebar-open" icon="menu" label="Open sidebar" onClick={() => setSidebarPath(path)} />
+            <IconButton aria-controls="workspace-sidebar" aria-expanded={sidebarOpen} aria-haspopup="dialog" className="sidebar-open" icon="menu" label="Open sidebar" onClick={(event) => { event.currentTarget.focus(); setSidebarPath(path); }} />
             <div className="breadcrumbs">
               <AppLink onNavigate={onNavigate} to="/app/overview">
                 Workspace
@@ -379,7 +379,7 @@ export function WorkspaceShell({ children, path, onNavigate, theme, onToggleThem
             </div>
           </div>
           <div className="workspace-topbar-actions">
-            <button aria-controls="workspace-command-center" aria-expanded={commandOpen} aria-haspopup="dialog" aria-label="Search workspace" className="command-trigger" onClick={() => setCommandOpen(true)} type="button">
+            <button aria-controls="workspace-command-center" aria-expanded={commandOpen} aria-haspopup="dialog" aria-label="Search workspace" className="command-trigger" onClick={(event) => { event.currentTarget.focus(); setCommandOpen(true); }} type="button">
               <Icon name="search" size={15} />
               <span>Search workspace</span>
               <Kbd>⌘ K</Kbd>
