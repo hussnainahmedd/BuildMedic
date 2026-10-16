@@ -183,6 +183,10 @@ installs from the lockfile, runs test/typecheck/lint/build scripts, builds the
 Docker image, starts the container, and runs the production HTTP smoke. Any missing file
 or failing command fails the workflow.
 
+Hardening code `4ae575e` (included in `3f8318f`) passed
+[Linux/Docker CI run 38897847991](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38897847991).
+This verifies build and HTTP delivery, not real-browser worker execution.
+
 ### Deployment
 
 The MVP can be deployed as static assets or with the included production

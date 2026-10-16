@@ -2,9 +2,10 @@
 
 **Status:** The frontend bundle and multi-stage Dockerfile are implemented.
 Docker verification is performed in Linux CI because Docker is unavailable on
-the Windows development machine. The prior local-MVP checkpoint passed CI run
-[38818606997](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38818606997)
-at `fae0860`; that result does not verify later worker/hardening changes.
+the Windows development machine. Hardening code `4ae575e`, included in revision
+`3f8318f`, passed [CI run 38897847991](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38897847991):
+Linux tests/typecheck/lint/build, pinned Docker build, container startup, and
+production HTTP/worker-asset smoke. This does not establish browser execution.
 
 ## 1. Deployment model
 

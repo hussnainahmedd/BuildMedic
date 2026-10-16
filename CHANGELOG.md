@@ -47,14 +47,17 @@ currently in an unreleased local-MVP checkpoint.
   added actual production worker-asset HTTP smoke checks to Linux CI.
 - Verified 142 local tests, typecheck, lint, build, HTTP smoke, and zero reported
   vulnerabilities from `npm audit --audit-level=high` on 2026-10-16.
+- Verified Ubuntu/Docker CI run
+  [38897847991](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38897847991)
+  at `3f8318f`, including hardening code `4ae575e` and production worker delivery.
 
 ### Pending after this checkpoint
 
 - Browser performance/peak memory, manual accessibility/security, cross-browser
   review, and actual production-worker execution in a browser remain unverified.
-- Docker cannot be run on the Windows development machine. Docker build and
-  HTTP smoke verification passed for the prior MVP in GitHub Actions run `38818606997`; the new
-  checkpoint still needs its pushed CI run inspected.
+- Docker cannot be run on the Windows development machine; the Linux image and
+  HTTP checks passed in the run above. Future code revisions need their own
+  independently checked CI result.
 - Backend services, authentication, external AI integrations, raw-log
   persistence, automatic remediation, and unrestricted shell execution remain
   intentionally out of scope.
