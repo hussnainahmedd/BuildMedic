@@ -11,6 +11,7 @@ import {
   Divider,
   SectionHeading,
 } from "../components/ui";
+import { useTabKeyboard } from "../lib/tab-keyboard";
 
 export interface PublicPageProps {
   onNavigate: Navigate;
@@ -62,6 +63,7 @@ function ArrowLink({ href, label, onNavigate }: { href: string; label: string; o
 
 function HeroConsole({ onOpenDemo }: { onOpenDemo: () => void }) {
   const [activeTab, setActiveTab] = useState<"diagnosis" | "evidence">("diagnosis");
+  const { tabProps, panelProps } = useTabKeyboard(["diagnosis", "evidence"] as const, activeTab, setActiveTab);
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
 
   const style = {
@@ -117,26 +119,21 @@ function HeroConsole({ onOpenDemo }: { onOpenDemo: () => void }) {
           <div className="console-insight">
             <div className="console-insight-tabs" role="tablist" aria-label="Demo result view">
               <button
-                aria-selected={activeTab === "diagnosis"}
+                {...tabProps("diagnosis")}
                 className={activeTab === "diagnosis" ? "active" : ""}
-                onClick={() => setActiveTab("diagnosis")}
-                role="tab"
                 type="button"
               >
                 Diagnosis
               </button>
               <button
-                aria-selected={activeTab === "evidence"}
+                {...tabProps("evidence")}
                 className={activeTab === "evidence" ? "active" : ""}
-                onClick={() => setActiveTab("evidence")}
-                role="tab"
                 type="button"
               >
                 Evidence
               </button>
             </div>
-            {activeTab === "diagnosis" ? (
-              <div className="console-insight-content">
+              <div {...panelProps("diagnosis")} className="console-insight-content">
                 <div className="console-insight-kicker">
                   <span className="severity-dot severity-error" /> High confidence
                 </div>
@@ -147,8 +144,7 @@ function HeroConsole({ onOpenDemo }: { onOpenDemo: () => void }) {
                   <span>Handle the optional label</span>
                 </div>
               </div>
-            ) : (
-              <div className="console-insight-content">
+              <div {...panelProps("evidence")} className="console-insight-content">
                 <div className="console-insight-kicker">
                   <Icon name="hash" size={14} /> Lines 07–08
                 </div>
@@ -159,7 +155,6 @@ function HeroConsole({ onOpenDemo }: { onOpenDemo: () => void }) {
                   <span>Open the log viewer</span>
                 </div>
               </div>
-            )}
           </div>
         </div>
         <div className="console-footnote">

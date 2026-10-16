@@ -1,8 +1,7 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import { Icon, type IconName } from "./icons";
-import { AppLink, Badge, Button, Divider, IconButton, Kbd, Modal } from "./ui";
-import type { ThemeMode } from "../types";
+import { AppLink, Badge, Button, Divider, IconButton, Kbd, Modal, useDialogFocus, useMediaQuery } from "./ui";
 
 export type Navigate = (path: string) => void;
 
@@ -19,16 +18,23 @@ export function BrandMark({ compact = false }: { compact?: boolean }) {
   );
 }
 
-export function ThemeToggle({ theme, onToggle }: { theme: ThemeMode; onToggle: () => void }) {
+export function ThemeToggle({ theme, onToggle }: { theme: "dark" | "light"; onToggle: () => void }) {
   const label = theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
   return <IconButton icon={theme === "dark" ? "sun" : "moon"} label={label} onClick={onToggle} />;
+}
+
+function SkipLink() {
+  return <a className="skip-link" href="#main-content" onClick={(event) => {
+    event.preventDefault();
+    document.getElementById("main-content")?.focus();
+  }}>Skip to main content</a>;
 }
 
 interface PublicLayoutProps {
   children: ReactNode;
   path: string;
   onNavigate: Navigate;
-  theme: ThemeMode;
+  theme: "dark" | "light";
   onToggleTheme: () => void;
 }
 
@@ -39,30 +45,51 @@ const publicLinks = [
 ];
 
 export function PublicLayout({ children, path, onNavigate, theme, onToggleTheme }: PublicLayoutProps) {
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobilePath, setMobilePath] = useState<string | null>(null);
+  const isMobile = useMediaQuery("(max-width: 740px)");
+  const mobileOpen = isMobile && mobilePath === path;
+  const navigationRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    setMobileOpen(false);
-  }, [path]);
+    setMobilePath(null);
+  }, [isMobile, path]);
+
+  useEffect(() => {
+    const navigation = navigationRef.current;
+    if (!mobileOpen || !navigation) return;
+    const trigger = document.querySelector<HTMLButtonElement>("[aria-controls='public-navigation']");
+    navigation.querySelector<HTMLElement>("a")?.focus({ preventScroll: true });
+    const handleKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setMobilePath(null);
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      if (trigger && navigation.contains(document.activeElement) && getComputedStyle(trigger).display !== "none") trigger.focus({ preventScroll: true });
+    };
+  }, [isMobile, mobileOpen]);
 
   return (
     <div className="public-layout">
+      <SkipLink />
       <header className="public-header">
         <div className="container public-header-inner">
           <AppLink className="brand-link" onNavigate={onNavigate} to="/">
             <BrandMark />
           </AppLink>
-          <nav aria-label="Primary navigation" className={`public-nav${mobileOpen ? " public-nav-open" : ""}`}>
+          <nav aria-label="Primary navigation" className={`public-nav${mobileOpen ? " public-nav-open" : ""}`} id="public-navigation" ref={navigationRef}>
             {publicLinks.map((link) => (
-              <AppLink className={path === link.href ? "active" : ""} key={link.href} onNavigate={onNavigate} to={link.href}>
+              <AppLink aria-current={path === link.href ? "page" : undefined} className={path === link.href ? "active" : ""} key={link.href} onClick={() => setMobilePath(null)} onNavigate={onNavigate} to={link.href}>
                 {link.label}
               </AppLink>
             ))}
-            <AppLink className={path === "/about" ? "active" : ""} onNavigate={onNavigate} to="/about">
+            <AppLink aria-current={path === "/about" ? "page" : undefined} className={path === "/about" ? "active" : ""} onClick={() => setMobilePath(null)} onNavigate={onNavigate} to="/about">
               About
             </AppLink>
             <div className="public-nav-mobile-actions">
-              <Button onClick={() => onNavigate("/app/overview")} size="sm" icon="arrow-right" iconPosition="right">
+              <Button onClick={() => { setMobilePath(null); onNavigate("/app/overview"); }} size="sm" icon="arrow-right" iconPosition="right">
                 Open workspace
               </Button>
             </div>
@@ -74,14 +101,16 @@ export function PublicLayout({ children, path, onNavigate, theme, onToggleTheme 
             </Button>
             <IconButton
               className="mobile-menu-button"
+              aria-controls="public-navigation"
+              aria-expanded={mobileOpen}
               icon={mobileOpen ? "x" : "menu"}
               label={mobileOpen ? "Close navigation" : "Open navigation"}
-              onClick={() => setMobileOpen((open) => !open)}
+              onClick={() => setMobilePath(mobileOpen ? null : path)}
             />
           </div>
         </div>
       </header>
-      <main>{children}</main>
+      <main id="main-content" tabIndex={-1}>{children}</main>
       <PublicFooter onNavigate={onNavigate} />
     </div>
   );
@@ -161,7 +190,7 @@ interface WorkspaceShellProps {
   children: ReactNode;
   path: string;
   onNavigate: Navigate;
-  theme: ThemeMode;
+  theme: "dark" | "light";
   onToggleTheme: () => void;
   onOpenToast: (message: string) => void;
 }
@@ -209,6 +238,7 @@ function WorkspaceNav({ path, onNavigate, onClose }: { path: string; onNavigate:
             const active = path === item.href || (item.href === "/app/overview" && path === "/app");
             return (
               <AppLink
+                aria-current={active ? "page" : undefined}
                 className={`workspace-nav-item${active ? " active" : ""}`}
                 key={item.href}
                 onClick={onClose}
@@ -242,15 +272,20 @@ function WorkspaceNav({ path, onNavigate, onClose }: { path: string; onNavigate:
   );
 }
 
-export function WorkspaceShell({ children, path, onNavigate, theme, onToggleTheme, onOpenToast }: WorkspaceShellProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+export function WorkspaceShell({ children, path, onNavigate, theme, onToggleTheme }: WorkspaceShellProps) {
+  const [sidebarPath, setSidebarPath] = useState<string | null>(null);
   const [commandOpen, setCommandOpen] = useState(false);
+  const isMobile = useMediaQuery("(max-width: 960px)");
+  const sidebarOpen = isMobile && sidebarPath === path;
+  const sidebarLayerRef = useRef<HTMLDivElement>(null);
+  const closeSidebar = () => setSidebarPath(null);
+  useDialogFocus(sidebarOpen, sidebarLayerRef, closeSidebar, ".sidebar-close");
 
   useEffect(() => {
-    const handleKey = (event: KeyboardEvent) => {
+    const handleKey = (event: globalThis.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setCommandOpen(true);
+        if (!document.querySelector("[aria-modal='true']")) setCommandOpen(true);
       }
     };
     document.addEventListener("keydown", handleKey);
@@ -258,8 +293,8 @@ export function WorkspaceShell({ children, path, onNavigate, theme, onToggleThem
   }, []);
 
   useEffect(() => {
-    setSidebarOpen(false);
-  }, [path]);
+    setSidebarPath(null);
+  }, [isMobile, path]);
 
   const pageTitle = useMemo(() => {
     const match = workspaceGroups.flatMap((group) => group.items).find((item) => item.href === path);
@@ -278,42 +313,73 @@ export function WorkspaceShell({ children, path, onNavigate, theme, onToggleThem
     onNavigate(href);
   }
 
+  function handleCommandKey(event: KeyboardEvent<HTMLElement>) {
+    if (event.altKey || event.ctrlKey || event.metaKey || (event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable='true']"))) return;
+    const commands = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(".command-item")];
+    const activeIndex = commands.indexOf(document.activeElement as HTMLButtonElement);
+    const numberIndex = /^[1-4]$/.test(event.key) ? Number(event.key) - 1 : -1;
+    if (numberIndex >= 0) {
+      event.preventDefault();
+      commands[numberIndex]?.click();
+    } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? commands.length - 1
+        : event.key === "ArrowDown" ? (activeIndex + 1) % commands.length
+          : activeIndex <= 0 ? commands.length - 1 : activeIndex - 1;
+      commands[nextIndex]?.focus();
+    } else if (event.key === "Enter" && activeIndex >= 0) {
+      event.preventDefault();
+      commands[activeIndex]?.click();
+    }
+  }
+
   return (
     <div className="workspace-layout">
-      <aside className={`workspace-sidebar${sidebarOpen ? " is-open" : ""}`}>
-        <div className="workspace-sidebar-top">
-          <AppLink className="brand-link workspace-brand" onNavigate={onNavigate} to="/">
-            <BrandMark />
-          </AppLink>
-          <IconButton className="sidebar-close" icon="x" label="Close sidebar" onClick={() => setSidebarOpen(false)} />
-        </div>
-        <div className="workspace-context">
-          <span className="workspace-context-icon">
-            <Icon name="terminal" size={18} />
-          </span>
-          <span>
-            <strong>BuildMedic Lab</strong>
-            <small>Personal workspace</small>
-          </span>
-          <Icon name="chevron-down" size={15} />
-        </div>
-        <WorkspaceNav onClose={() => setSidebarOpen(false)} onNavigate={onNavigate} path={path} />
-      </aside>
-      {sidebarOpen ? <button aria-label="Close navigation overlay" className="sidebar-overlay" onClick={() => setSidebarOpen(false)} type="button" /> : null}
+      <SkipLink />
+      <div className="workspace-sidebar-layer" ref={sidebarLayerRef} tabIndex={-1}>
+        <aside
+          aria-hidden={isMobile && !sidebarOpen ? true : undefined}
+          aria-label={sidebarOpen ? "Workspace navigation" : undefined}
+          aria-modal={sidebarOpen ? true : undefined}
+          className={`workspace-sidebar${sidebarOpen ? " is-open" : ""}`}
+          id="workspace-sidebar"
+          inert={isMobile && !sidebarOpen}
+          role={sidebarOpen ? "dialog" : undefined}
+        >
+          <div className="workspace-sidebar-top">
+            <AppLink className="brand-link workspace-brand" onNavigate={onNavigate} to="/">
+              <BrandMark />
+            </AppLink>
+            <IconButton className="sidebar-close" icon="x" label="Close sidebar" onClick={closeSidebar} />
+          </div>
+          <div className="workspace-context">
+            <span className="workspace-context-icon">
+              <Icon name="terminal" size={18} />
+            </span>
+            <span>
+              <strong>BuildMedic Lab</strong>
+              <small>Personal workspace</small>
+            </span>
+            <Icon name="chevron-down" size={15} />
+          </div>
+          <WorkspaceNav onClose={closeSidebar} onNavigate={onNavigate} path={path} />
+        </aside>
+        {sidebarOpen ? <button aria-hidden="true" className="sidebar-overlay" onClick={closeSidebar} tabIndex={-1} type="button" /> : null}
+      </div>
       <div className="workspace-main">
         <header className="workspace-topbar">
           <div className="workspace-topbar-left">
-            <IconButton className="sidebar-open" icon="menu" label="Open sidebar" onClick={() => setSidebarOpen(true)} />
+            <IconButton aria-controls="workspace-sidebar" aria-expanded={sidebarOpen} aria-haspopup="dialog" className="sidebar-open" icon="menu" label="Open sidebar" onClick={() => setSidebarPath(path)} />
             <div className="breadcrumbs">
               <AppLink onNavigate={onNavigate} to="/app/overview">
                 Workspace
               </AppLink>
               <Icon name="chevron-right" size={14} />
-              <span>{pageTitle}</span>
+              <span aria-current="page">{pageTitle}</span>
             </div>
           </div>
           <div className="workspace-topbar-actions">
-            <button className="command-trigger" onClick={() => setCommandOpen(true)} type="button">
+            <button aria-controls="workspace-command-center" aria-expanded={commandOpen} aria-haspopup="dialog" aria-label="Search workspace" className="command-trigger" onClick={() => setCommandOpen(true)} type="button">
               <Icon name="search" size={15} />
               <span>Search workspace</span>
               <Kbd>⌘ K</Kbd>
@@ -322,8 +388,8 @@ export function WorkspaceShell({ children, path, onNavigate, theme, onToggleThem
               Demo mode
             </Badge>
             <ThemeToggle onToggle={onToggleTheme} theme={theme} />
-            <IconButton icon="circle-help" label="Open help" onClick={() => onNavigate("/app/help")} />
-            <button className="avatar-button" onClick={() => onNavigate("/app/settings")} type="button">
+            <IconButton className="workspace-help-button" icon="circle-help" label="Open help" onClick={() => onNavigate("/app/help")} />
+            <button aria-label="Open settings" className="avatar-button" onClick={() => onNavigate("/app/settings")} type="button">
               <span className="avatar">BM</span>
               <span className="avatar-copy">
                 <strong>BuildMedic</strong>
@@ -333,12 +399,12 @@ export function WorkspaceShell({ children, path, onNavigate, theme, onToggleThem
             </button>
           </div>
         </header>
-        <div className="workspace-content">{children}</div>
+        <main className="workspace-content" id="main-content" tabIndex={-1}>{children}</main>
       </div>
-      <Modal description="Jump to a workspace surface without losing your place." onClose={() => setCommandOpen(false)} open={commandOpen} title="Command center" size="sm">
+      <Modal description="Jump to a workspace surface without losing your place." id="workspace-command-center" onClose={() => setCommandOpen(false)} onKeyDown={handleCommandKey} open={commandOpen} title="Command center" size="sm">
         <div className="command-list">
           {commandItems.map((item, index) => (
-            <button className="command-item" key={item.href} onClick={() => goFromCommand(item.href)} type="button">
+            <button aria-keyshortcuts={String(index + 1)} className="command-item" key={item.href} onClick={() => goFromCommand(item.href)} type="button">
               <span className="command-item-icon">
                 <Icon name={item.icon} size={17} />
               </span>
@@ -348,10 +414,10 @@ export function WorkspaceShell({ children, path, onNavigate, theme, onToggleThem
           ))}
         </div>
         <Divider />
-        <button className="command-note" onClick={() => onOpenToast("Keyboard navigation is ready for the next step.")} type="button">
+        <p className="command-note">
           <Icon name="info" size={15} />
-          <span>Use ↑ ↓ to browse · Enter to open · Esc to close</span>
-        </button>
+          <span>Use ↑ ↓ to browse · Enter to open · 1–4 to jump · Esc to close</span>
+        </p>
       </Modal>
     </div>
   );

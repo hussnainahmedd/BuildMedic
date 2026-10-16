@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { analyzeLog } from "./analyzer";
 import { PublicLayout, WorkspaceShell, type Navigate } from "./components/layout";
-import { Toast } from "./components/ui";
+import { Toast, useMediaQuery } from "./components/ui";
 import { DEMO_NODE_BUILD_LOG } from "./data";
 import { LocalTaskClient, isLocalTaskAbort, localTaskMessage } from "./lib/analysis-client";
 import { browserStorage, clearStoredHistory, makeHistoryEntry, MAX_HISTORY_ENTRIES, readHistory, readPreferences, whitelistPreferences, writeHistory, writePreferences } from "./lib/history";
@@ -55,7 +55,7 @@ function useCurrentPath(): [string, Navigate] {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
-  const navigate: Navigate = (nextPath) => {
+  const navigate: Navigate = useCallback((nextPath) => {
     if (/^(https?:|mailto:)/.test(nextPath)) {
       window.open(nextPath, "_blank", "noopener,noreferrer");
       return;
@@ -68,19 +68,15 @@ function useCurrentPath(): [string, Navigate] {
     }
     window.history.pushState({}, "", nextPath);
     setPath(normalized);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
+    const reducedMotion = document.documentElement.dataset.motion === "reduced" || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: reducedMotion ? "instant" : "smooth" });
+  }, []);
 
   return [path, navigate];
 }
 
 function emptyAnalysis(): AnalysisResult {
   return analyzeLog("");
-}
-
-function resolveColorScheme(theme: ThemeMode): "dark" | "light" {
-  if (theme !== "system") return theme;
-  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
 function usePageTitle(path: string) {
@@ -132,7 +128,15 @@ export function App() {
   const isWorkspace = path === "/app" || path.startsWith("/app/");
   usePageTitle(path);
 
-  const resolvedScheme = useMemo(() => resolveColorScheme(preferences.theme), [preferences.theme]);
+  const systemLight = useMediaQuery("(prefers-color-scheme: light)");
+  const resolvedScheme = preferences.theme === "system" ? (systemLight ? "light" : "dark") : preferences.theme;
+  const previousPath = useRef(path);
+
+  useEffect(() => {
+    if (previousPath.current === path) return;
+    previousPath.current = path;
+    document.getElementById("main-content")?.focus({ preventScroll: true });
+  }, [path]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedScheme;
@@ -355,11 +359,11 @@ export function App() {
   return (
     <div className="app-root">
       {isWorkspace ? (
-        <WorkspaceShell onNavigate={navigate} onOpenToast={notify} onToggleTheme={toggleTheme} path={path} theme={preferences.theme}>
+        <WorkspaceShell onNavigate={navigate} onOpenToast={notify} onToggleTheme={toggleTheme} path={path} theme={resolvedScheme}>
           {renderWorkspacePage(path, workspaceProps)}
         </WorkspaceShell>
       ) : (
-        <PublicLayout onNavigate={navigate} onToggleTheme={toggleTheme} path={path} theme={preferences.theme}>
+        <PublicLayout onNavigate={navigate} onToggleTheme={toggleTheme} path={path} theme={resolvedScheme}>
           {renderPublicPage(path, publicProps)}
         </PublicLayout>
       )}

@@ -3,12 +3,156 @@ import {
   type ButtonHTMLAttributes,
   type HTMLAttributes,
   type InputHTMLAttributes,
+  type KeyboardEventHandler,
   type ReactNode,
+  type RefObject,
   type TextareaHTMLAttributes,
+  useCallback,
   useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
 
 import { Icon, type IconName } from "./icons";
+
+export function useMediaQuery(query: string): boolean {
+  const subscribe = useCallback((onChange: () => void) => {
+    const media = window.matchMedia(query);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, [query]);
+  const getSnapshot = useCallback(() => window.matchMedia(query).matches, [query]);
+  return useSyncExternalStore(subscribe, getSnapshot, () => false);
+}
+
+interface FocusScope { element: HTMLElement; lastFocused?: HTMLElement }
+const focusScopes: FocusScope[] = [];
+const isolatedElements = new Map<HTMLElement, { inert: string | null; ariaHidden: string | null }>();
+let bodyOverflow: string | undefined;
+
+function restoreBackground() {
+  for (const [element, attributes] of isolatedElements) {
+    for (const [name, value] of [["inert", attributes.inert], ["aria-hidden", attributes.ariaHidden]] as const) {
+      if (value === null) element.removeAttribute(name);
+      else element.setAttribute(name, value);
+    }
+  }
+  isolatedElements.clear();
+}
+
+function isolateBackground() {
+  const activeScope = focusScopes.at(-1);
+  if (!activeScope) {
+    if (bodyOverflow !== undefined) document.body.style.overflow = bodyOverflow;
+    bodyOverflow = undefined;
+    return;
+  }
+  if (bodyOverflow === undefined) bodyOverflow = document.body.style.overflow;
+  document.body.style.overflow = "hidden";
+  // Isolate siblings along the ancestor path, never an ancestor of the dialog.
+  // This also supports the mobile drawer without hiding its backdrop.
+  let branch = activeScope.element;
+  while (branch.parentElement) {
+    const parent = branch.parentElement;
+    for (const sibling of parent.children) {
+      if (sibling === branch || !(sibling instanceof HTMLElement) || /^(SCRIPT|STYLE|LINK)$/.test(sibling.tagName)) continue;
+      isolatedElements.set(sibling, { inert: sibling.getAttribute("inert"), ariaHidden: sibling.getAttribute("aria-hidden") });
+      sibling.setAttribute("inert", "");
+      sibling.setAttribute("aria-hidden", "true");
+    }
+    if (parent === document.body) break;
+    branch = parent;
+  }
+}
+
+function isAvailableForFocus(element: HTMLElement): boolean {
+  if (!element.isConnected || element.closest("[inert], [hidden], [aria-hidden='true']") || element.matches(":disabled")) return false;
+  for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+    const style = getComputedStyle(current);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+  }
+  return true;
+}
+
+function tabStops(element: HTMLElement): HTMLElement[] {
+  return [...element.querySelectorAll<HTMLElement>("a[href], area[href], button, input, select, textarea, iframe, [contenteditable='true'], [tabindex]")]
+    .filter((candidate) => candidate.tabIndex >= 0 && isAvailableForFocus(candidate))
+    .sort((a, b) => (a.tabIndex > 0 ? a.tabIndex : Infinity) - (b.tabIndex > 0 ? b.tabIndex : Infinity));
+}
+
+/** Shared dialog/drawer lifecycle. Callback updates never restart focus entry. */
+export function useDialogFocus(open: boolean, containerRef: RefObject<HTMLElement | null>, onClose: () => void, initialFocusSelector?: string) {
+  const closeRef = useRef(onClose);
+  const restoreFocusRef = useRef<{ target: HTMLElement; scope: HTMLElement } | null>(null);
+  useLayoutEffect(() => { closeRef.current = onClose; }, [onClose]);
+
+  // Restore after React's commit-time focus preservation, including when a
+  // drawer stays mounted and only becomes hidden/inert.
+  useEffect(() => () => {
+    const pending = restoreFocusRef.current;
+    restoreFocusRef.current = null;
+    if (pending && (pending.scope.contains(document.activeElement) || document.activeElement === document.body) && isAvailableForFocus(pending.target)) {
+      pending.target.focus({ preventScroll: true });
+    }
+  }, [open]);
+
+  useLayoutEffect(() => {
+    const element = containerRef.current;
+    if (!open || !element) return;
+    const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const scope: FocusScope = { element };
+    focusScopes.push(scope);
+    restoreBackground();
+    const initial = initialFocusSelector ? element.querySelector<HTMLElement>(initialFocusSelector) : null;
+    (initial ?? tabStops(element)[0] ?? element).focus({ preventScroll: true });
+    scope.lastFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    isolateBackground();
+
+    const handleFocus = (event: FocusEvent) => {
+      if (focusScopes.at(-1) !== scope) return;
+      if (event.target instanceof HTMLElement && element.contains(event.target)) {
+        scope.lastFocused = event.target;
+      } else {
+        const last = scope.lastFocused;
+        (last && isAvailableForFocus(last) ? last : tabStops(element)[0] ?? element).focus({ preventScroll: true });
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (focusScopes.at(-1) !== scope) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeRef.current();
+      } else if (event.key === "Tab") {
+        const stops = tabStops(element);
+        const first = stops[0];
+        const last = stops.at(-1);
+        const active = document.activeElement;
+        if (!first || !last) {
+          event.preventDefault();
+          element.focus({ preventScroll: true });
+        } else if (!element.contains(active) || active === element || (event.shiftKey ? active === first : active === last)) {
+          event.preventDefault();
+          (event.shiftKey ? last : first).focus({ preventScroll: true });
+        }
+      }
+    };
+    document.addEventListener("keydown", handleKey, true);
+    document.addEventListener("focusin", handleFocus);
+    return () => {
+      document.removeEventListener("keydown", handleKey, true);
+      document.removeEventListener("focusin", handleFocus);
+      const shouldRestore = focusScopes.at(-1) === scope && (element.contains(document.activeElement) || document.activeElement === document.body);
+      focusScopes.splice(focusScopes.indexOf(scope), 1);
+      restoreBackground();
+      isolateBackground();
+      if (shouldRestore && returnFocus) restoreFocusRef.current = { target: returnFocus, scope: element };
+    };
+  }, [containerRef, initialFocusSelector, open]);
+}
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "quiet" | "danger";
 export type ButtonSize = "sm" | "md" | "lg";
@@ -286,6 +430,8 @@ export function Modal({
   onClose,
   children,
   size = "md",
+  id,
+  onKeyDown,
 }: {
   open: boolean;
   title: string;
@@ -293,32 +439,35 @@ export function Modal({
   onClose: () => void;
   children: ReactNode;
   size?: "sm" | "md" | "lg";
+  id?: string;
+  onKeyDown?: KeyboardEventHandler<HTMLElement>;
 }) {
-  useEffect(() => {
-    if (!open) return undefined;
-
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [onClose, open]);
+  const dialogRef = useRef<HTMLElement>(null);
+  const titleId = useId();
+  const descriptionId = useId();
+  useDialogFocus(open, dialogRef, onClose);
 
   if (!open) return null;
 
-  return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} role="presentation">
-      <section aria-modal="true" className={`modal modal-${size}`} role="dialog" aria-labelledby="modal-title">
+  return createPortal(
+    <div className="modal-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) {
+        event.preventDefault();
+        onClose();
+      }
+    }} role="presentation">
+      <section aria-modal="true" className={`modal modal-${size}`} role="dialog" aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined} id={id} onKeyDown={onKeyDown} ref={dialogRef} tabIndex={-1}>
         <div className="modal-header">
           <div>
-            <h2 id="modal-title">{title}</h2>
-            {description ? <p>{description}</p> : null}
+            <h2 id={titleId}>{title}</h2>
+            {description ? <p id={descriptionId}>{description}</p> : null}
           </div>
           <IconButton icon="x" label="Close dialog" onClick={onClose} />
         </div>
         <div className="modal-body">{children}</div>
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

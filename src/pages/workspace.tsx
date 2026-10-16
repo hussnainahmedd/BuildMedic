@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 
 import { sanitizeEvidenceLine } from "../analyzer";
 import { Icon, type IconName } from "../components/icons";
@@ -21,6 +21,7 @@ import { DEMO_NODE_BUILD_LOG } from "../data";
 import { formatBytes, formatCategory, formatDate, formatNumber, formatSource } from "../lib/format";
 import { LocalTaskClient, SMALL_INPUT_FALLBACK_BYTES, isLocalTaskAbort, localTaskMessage } from "../lib/analysis-client";
 import { buildAnalysisReport, NO_BUILD_DISCLAIMER, REPORT_FILE_NAME, REPORT_REDACTION_NOTICE, reportStatus, safeReportText } from "../lib/report";
+import { useTabKeyboard } from "../lib/tab-keyboard";
 import { useLogInspection } from "../lib/use-log-inspection";
 import { VIEWER_PAGE_SIZE, type ViewerPage } from "../workers/protocol";
 import {
@@ -377,9 +378,10 @@ export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnaly
 
   function submit() {
     setTouched(true);
-    if (fileError) { onNotify(fileError); return; }
+    if (fileError) { onNotify(fileError); document.getElementById("log-file")?.focus(); return; }
     if (!validation.valid) {
       onNotify(validation.error.message);
+      document.getElementById("analysis-log")?.focus();
       return;
     }
     if (isAnalyzing || isReading || inspection.pending) return;
@@ -502,9 +504,9 @@ export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnaly
               <Badge tone={validation.valid ? "success" : "neutral"} dot>{validation.valid ? "Ready" : "Waiting for input"}</Badge>
             </div>
           </div>
-          <div className="input-mode-tabs" role="tablist" aria-label="Input mode">
-            <button disabled={isAnalyzing} aria-selected={inputMode === "paste"} className={inputMode === "paste" ? "active" : ""} onClick={() => { abortRead(); setInputMode("paste"); setFileName(""); onEditInput?.(text, "paste"); }} role="tab" type="button"><Icon name="terminal" size={15} /> Paste text</button>
-            <button disabled={isAnalyzing} aria-selected={inputMode === "file"} className={inputMode === "file" ? "active" : ""} onClick={() => { abortRead(); setInputMode("file"); onEditInput?.(text, "file", fileName || undefined); }} role="tab" type="button"><Icon name="upload-cloud" size={15} /> Upload file</button>
+          <div className="input-mode-tabs" role="group" aria-label="Input mode">
+            <button disabled={isAnalyzing} aria-pressed={inputMode === "paste"} className={inputMode === "paste" ? "active" : ""} onClick={() => { abortRead(); setInputMode("paste"); setFileName(""); onEditInput?.(text, "paste"); }} type="button"><Icon name="terminal" size={15} /> Paste text</button>
+            <button disabled={isAnalyzing} aria-pressed={inputMode === "file"} className={inputMode === "file" ? "active" : ""} onClick={() => { abortRead(); setInputMode("file"); onEditInput?.(text, "file", fileName || undefined); }} type="button"><Icon name="upload-cloud" size={15} /> Upload file</button>
           </div>
           <TextareaField
             aria-busy={isAnalyzing}
@@ -724,6 +726,7 @@ function escapeRegExp(value: string): string {
 
 export function LogViewerPage({ onNavigate, onNotify, currentLog, currentFileName, analysis, preferences }: WorkspacePageProps) {
   const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<"all" | "errors">("all");
   const [page, setPage] = useState(0);
   const hasLog = currentLog.length > 0;
@@ -733,6 +736,19 @@ export function LogViewerPage({ onNavigate, onNotify, currentLog, currentFileNam
   const [isLoading, setIsLoading] = useState(hasLog);
   const [isCopying, setIsCopying] = useState(false);
   const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const isTyping = (target: EventTarget | null) => target instanceof Element && Boolean(target.closest("input, textarea, select, [contenteditable], [role='textbox']"));
+    const focusSearch = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey || event.isComposing || event.repeat) return;
+      if (isTyping(event.target) || isTyping(document.activeElement)) return;
+      const search = searchRef.current;
+      if (!search || search.closest("[inert], [hidden], [aria-hidden='true']")) return;
+      event.preventDefault();
+      search.focus();
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
   useEffect(() => {
     setDisplay(null);
     setPrepared(null);
@@ -822,7 +838,7 @@ export function LogViewerPage({ onNavigate, onNotify, currentLog, currentFileNam
       <Card className="log-viewer-card">
         <div className="log-viewer-toolbar">
           <div className="log-file-title"><span className="log-file-icon"><Icon name="file-code" size={16} /></span><span><strong>{fileName}</strong><small>{result?.lineCount ?? 0} lines · {formatBytes(result?.inputBytes ?? 0)}</small></span></div>
-          <div className="log-viewer-actions"><div className="log-search"><Icon name="search" size={15} /><input aria-label="Search log" maxLength={256} onChange={(event) => updateQuery(event.target.value)} placeholder="Find in log..." value={query} />{query ? <IconButton icon="x" label="Clear search" onClick={() => updateQuery("")} size="sm" /> : null}</div><div className="segmented-control" role="group" aria-label="Log filter"><button aria-pressed={mode === "all"} className={mode === "all" ? "active" : ""} onClick={() => updateMode("all")} type="button">All</button><button aria-pressed={mode === "errors"} className={mode === "errors" ? "active" : ""} onClick={() => updateMode("errors")} type="button">Errors only</button></div></div>
+          <div className="log-viewer-actions"><div className="log-search"><Icon name="search" size={15} /><input aria-label="Search log" aria-keyshortcuts="/" maxLength={256} onChange={(event) => updateQuery(event.target.value)} placeholder="Find in log..." ref={searchRef} value={query} />{query ? <IconButton icon="x" label="Clear search" onClick={() => { updateQuery(""); searchRef.current?.focus(); }} size="sm" /> : null}</div><div className="segmented-control" role="group" aria-label="Log filter"><button aria-pressed={mode === "all"} className={mode === "all" ? "active" : ""} onClick={() => updateMode("all")} type="button">All</button><button aria-pressed={mode === "errors"} className={mode === "errors" ? "active" : ""} onClick={() => updateMode("errors")} type="button">Errors only</button></div></div>
         </div>
         <div className="log-viewer-meta"><span><span className="status-pulse" /> Sanitized read-only evidence{result?.truncated ? " · long lines truncated" : ""}</span><span>{filteredCount ? `${currentPage * LOG_PAGE_SIZE + 1}–${currentPage * LOG_PAGE_SIZE + visibleLines.length}` : 0} of {filteredCount} matching lines · {result?.lineCount ?? 0} total</span></div>
         {viewerError ? <div className="field-error" role="alert">{viewerError} <Button onClick={() => setRetry((value) => value + 1)} variant="quiet" size="sm">Retry log display</Button></div> : null}
@@ -909,10 +925,17 @@ export function VerificationPage({ onNavigate, onNotify, onCompareVerification, 
     if (isVerifying || pending) return;
     if (!baselineValidation.valid || !rerunValidation.valid) {
       onNotify(baselineError ?? rerunError ?? "Add both logs before comparing.");
+      document.getElementById(!baselineValidation.valid ? "baseline-log" : "rerun-log")?.focus();
       return;
     }
     setInputsChanged(false);
     onCompareVerification(baseline, rerun);
+  }
+
+  function handleCompareShortcut(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.defaultPrevented || event.key !== "Enter" || !(event.ctrlKey || event.metaKey) || event.altKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    if (!event.repeat) compare();
   }
 
   return (
@@ -926,19 +949,19 @@ export function VerificationPage({ onNavigate, onNotify, onCompareVerification, 
       <div className="verification-input-grid">
         <Card className="verification-input-card">
           <div className="verification-input-head"><span className="verification-step">01</span><div><span className="panel-kicker">Baseline</span><h2>Before the fix</h2></div><Badge tone="neutral">Current log</Badge></div>
-          <TextareaField disabled={isVerifying} aria-busy={isVerifying || baselineInspection.pending} error={touched && !baselineInspection.pending ? baselineError : undefined} id="baseline-log" label="Original build log" onBlur={() => setTouched(true)} onChange={(event) => changeInputs(event.target.value, rerun)} value={baseline} />
+          <TextareaField disabled={isVerifying} aria-busy={isVerifying || baselineInspection.pending} aria-keyshortcuts="Control+Enter Meta+Enter" error={touched && !baselineInspection.pending ? baselineError : undefined} id="baseline-log" label="Original build log" onBlur={() => setTouched(true)} onChange={(event) => changeInputs(event.target.value, rerun)} onKeyDown={handleCompareShortcut} value={baseline} />
           <span className="verification-input-meta"><Icon name="file-code" size={13} /> {baselineInspection.pending ? "Checking input locally…" : `${baselineInspection.lineCount} lines · ${formatBytes(baselineInspection.byteCount)}`}</span>
         </Card>
         <div className="verification-connector" aria-hidden="true"><span>compare</span><Icon name="arrow-right" size={18} /></div>
         <Card className="verification-input-card">
           <div className="verification-input-head"><span className="verification-step verification-step-accent">02</span><div><span className="panel-kicker">Rerun</span><h2>After the fix</h2></div><Badge tone="accent">New input</Badge></div>
-          <TextareaField disabled={isVerifying} aria-busy={isVerifying || rerunInspection.pending} error={touched && !rerunInspection.pending ? rerunError : undefined} id="rerun-log" label="Rerun build log" onBlur={() => setTouched(true)} onChange={(event) => changeInputs(baseline, event.target.value)} value={rerun} />
+          <TextareaField disabled={isVerifying} aria-busy={isVerifying || rerunInspection.pending} aria-keyshortcuts="Control+Enter Meta+Enter" error={touched && !rerunInspection.pending ? rerunError : undefined} id="rerun-log" label="Rerun build log" onBlur={() => setTouched(true)} onChange={(event) => changeInputs(baseline, event.target.value)} onKeyDown={handleCompareShortcut} value={rerun} />
           <span className="verification-input-meta"><Icon name="file-code" size={13} /> {rerunInspection.pending ? "Checking input locally…" : `${rerunInspection.lineCount} lines · ${formatBytes(rerunInspection.byteCount)}`}</span>
         </Card>
       </div>
       <div className="verification-actions"><Button disabled={isVerifying || pending} onClick={compare} size="lg" icon="shield-check">{isVerifying ? "Comparing…" : "Compare findings"}</Button>{isVerifying && onCancelVerification ? <Button onClick={onCancelVerification} variant="quiet" icon="x">Cancel comparison</Button> : null}</div>
       {!inputsChanged && verificationError ? <div className="field-error" role="alert">{verificationError}</div> : null}
-      {isVerifying ? <Card className="verification-empty-card"><StatusRow>Analyzing baseline and rerun locally…</StatusRow></Card> : visibleVerification?.status === "invalid" ? <Card className="verification-empty-card"><EmptyState description={visibleVerification.error.message} icon="circle-alert" title="Comparison could not be completed" /></Card> : visibleVerification?.status === "no-match" ? <VerificationNoMatchCard result={visibleVerification} /> : visibleVerification?.status === "compared" ? <VerificationResultCard onNavigate={onNavigate} result={visibleVerification} /> : <Card className="verification-empty-card"><EmptyState description="Enter a rerun log, then compare the analyzer findings. No build result is inferred from an empty comparison." icon="shield-check" title="Waiting for a rerun" action={<span className="empty-state-meta"><Kbd>⌘</Kbd> <Kbd>↵</Kbd> compare when ready</span>} /></Card>}
+      {isVerifying ? <Card className="verification-empty-card"><StatusRow>Analyzing baseline and rerun locally…</StatusRow></Card> : visibleVerification?.status === "invalid" ? <Card className="verification-empty-card"><EmptyState description={visibleVerification.error.message} icon="circle-alert" title="Comparison could not be completed" /></Card> : visibleVerification?.status === "no-match" ? <VerificationNoMatchCard result={visibleVerification} /> : visibleVerification?.status === "compared" ? <VerificationResultCard onNavigate={onNavigate} result={visibleVerification} /> : <Card className="verification-empty-card"><EmptyState description="Enter a rerun log, then compare the analyzer findings. No build result is inferred from an empty comparison." icon="shield-check" title="Waiting for a rerun" action={<span className="empty-state-meta"><Kbd>Ctrl/Cmd</Kbd> <Kbd>Enter</Kbd> compare when ready</span>} /></Card>}
     </div>
   );
 }
@@ -953,7 +976,7 @@ export function HistoryPage({ onNavigate, history, onOpenHistory, onClearHistory
     <div className="workspace-page history-page">
       <WorkspacePageHeader actions={<Button onClick={() => onNavigate("/app/new-analysis")} icon="plus">New analysis</Button>} description="Review metadata from analyses in this workspace. Older entries do not retain raw logs; in-session logs can be reopened when available." eyebrow="Library / history" title="Keep the thread of the failure." />
       <Card className="history-table-card">
-        <div className="history-toolbar"><div className="log-search"><Icon name="search" size={15} /><input aria-label="Search history" onChange={(event) => setQuery(event.target.value)} placeholder="Search analyses..." value={query} />{query ? <IconButton icon="x" label="Clear history search" onClick={() => setQuery("")} size="sm" /> : null}</div><div className="segmented-control" role="group" aria-label="History status filter"><button className={status === "all" ? "active" : ""} onClick={() => setStatus("all")} type="button">All</button><button className={status === "complete" ? "active" : ""} onClick={() => setStatus("complete")} type="button">Findings</button><button className={status === "no-match" ? "active" : ""} onClick={() => setStatus("no-match")} type="button">No match</button><button className={status === "invalid" ? "active" : ""} onClick={() => setStatus("invalid")} type="button">Invalid</button></div></div>
+        <div className="history-toolbar"><div className="log-search"><Icon name="search" size={15} /><input aria-label="Search history" onChange={(event) => setQuery(event.target.value)} placeholder="Search analyses..." value={query} />{query ? <IconButton icon="x" label="Clear history search" onClick={() => setQuery("")} size="sm" /> : null}</div><div className="segmented-control" role="group" aria-label="History status filter"><button aria-pressed={status === "all"} className={status === "all" ? "active" : ""} onClick={() => setStatus("all")} type="button">All</button><button aria-pressed={status === "complete"} className={status === "complete" ? "active" : ""} onClick={() => setStatus("complete")} type="button">Findings</button><button aria-pressed={status === "no-match"} className={status === "no-match" ? "active" : ""} onClick={() => setStatus("no-match")} type="button">No match</button><button aria-pressed={status === "invalid"} className={status === "invalid" ? "active" : ""} onClick={() => setStatus("invalid")} type="button">Invalid</button></div></div>
         <div className="history-table-head"><span>Analysis</span><span>Source</span><span>Result</span><span>Opened</span><span /></div>
         {filtered.length ? <div className="history-table-body">{filtered.map((entry) => <button className="history-table-row" key={entry.id} onClick={() => onOpenHistory(entry.analysisId)} type="button"><span className="history-table-name"><span className="history-row-icon"><Icon name={entry.status === "invalid" ? "circle-alert" : "file-code"} size={15} /></span><span><strong>{entry.label}</strong><small>{entry.summary}</small></span></span><span className="history-source"><Icon name={entry.source === "file" ? "file-code" : "terminal"} size={14} /> {formatSource(entry.source)}</span><span><Badge tone={historyStatusTone(entry.status)}>{entry.status === "complete" ? `${entry.findingCount} ${entry.findingCount === 1 ? "finding" : "findings"}` : historyStatusLabel(entry.status)}</Badge></span><span className="history-date">{formatDate(entry.createdAt)}</span><Icon name="chevron-right" size={15} /></button>)}</div> : <EmptyState description={history.length ? "No metadata entry matches this filter." : "Run an analysis to create metadata for this list."} icon="search" title="Nothing found" />}
         <div className="viewer-footer-note"><Icon name="info" size={14} /><span>History metadata includes status, source, size, and counts. Raw logs are not persisted.</span>{onClearHistory && history.length ? <Button onClick={onClearHistory} variant="quiet" size="sm" icon="x">Clear history</Button> : null}</div>
@@ -964,6 +987,7 @@ export function HistoryPage({ onNavigate, history, onOpenHistory, onClearHistory
 
 export function ReportsPage({ onNotify, analysis, currentLog, currentFileName }: WorkspacePageProps) {
   const [tab, setTab] = useState<"overview" | "evidence" | "next">("overview");
+  const { tabProps, panelProps } = useTabKeyboard(["overview", "evidence", "next"] as const, tab, setTab);
   const hasInput = hasSubmittedInput(analysis) || hasInvalidInput(analysis, currentLog);
   const report = useMemo(() => buildAnalysisReport(analysis, hasInput), [analysis, hasInput]);
   const activeFinding = analysis.status === "complete" ? analysis.findings[0] : undefined;
@@ -1020,8 +1044,10 @@ export function ReportsPage({ onNotify, analysis, currentLog, currentFileName }:
         </Card>
         <Card className="report-outline-card">
           <div className="panel-heading"><div><span className="panel-kicker">Report outline</span><h2>What gets shared</h2></div><Icon name="sliders" size={17} /></div>
-          <div className="report-tabs" role="tablist" aria-label="Report sections"><button role="tab" aria-selected={tab === "overview"} className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")} type="button">Overview</button><button role="tab" aria-selected={tab === "evidence"} className={tab === "evidence" ? "active" : ""} onClick={() => setTab("evidence")} type="button">Evidence</button><button role="tab" aria-selected={tab === "next"} className={tab === "next" ? "active" : ""} onClick={() => setTab("next")} type="button">Next step</button></div>
-          <div className="report-tab-content" role="tabpanel">{tab === "overview" ? <><span className="outline-number">01</span><h3>Diagnosis first</h3><p>{activeFinding ? `${safeReportText(activeFinding.title)} is ranked first by the analyzer with ${activeFinding.confidence} confidence. All ${analysis.findings.length} bounded findings are included in the full report.` : "The current analyzer status and input metadata stay together at the top."}</p></> : tab === "evidence" ? <><span className="outline-number">02</span><h3>Evidence stays inspectable</h3><p>{activeFinding ? "Sanitized source evidence from every bounded finding is included with one-based positions." : "No diagnostic evidence is available for this result."}</p></> : <><span className="outline-number">03</span><h3>Actions stay reviewable</h3><p>{nextStep ? `${safeReportText(nextStep.label)}: ${safeReportText(nextStep.description)}` : "No suggested action is available until a supported finding is returned."}</p></>}</div>
+          <div className="report-tabs" role="tablist" aria-label="Report sections"><button {...tabProps("overview")} className={tab === "overview" ? "active" : ""} type="button">Overview</button><button {...tabProps("evidence")} className={tab === "evidence" ? "active" : ""} type="button">Evidence</button><button {...tabProps("next")} className={tab === "next" ? "active" : ""} type="button">Next step</button></div>
+          <div {...panelProps("overview")} className="report-tab-content"><span className="outline-number">01</span><h3>Diagnosis first</h3><p>{activeFinding ? `${safeReportText(activeFinding.title)} is ranked first by the analyzer with ${activeFinding.confidence} confidence. All ${analysis.findings.length} bounded findings are included in the full report.` : "The current analyzer status and input metadata stay together at the top."}</p></div>
+          <div {...panelProps("evidence")} className="report-tab-content"><span className="outline-number">02</span><h3>Evidence stays inspectable</h3><p>{activeFinding ? "Sanitized source evidence from every bounded finding is included with one-based positions." : "No diagnostic evidence is available for this result."}</p></div>
+          <div {...panelProps("next")} className="report-tab-content"><span className="outline-number">03</span><h3>Actions stay reviewable</h3><p>{nextStep ? `${safeReportText(nextStep.label)}: ${safeReportText(nextStep.description)}` : "No suggested action is available until a supported finding is returned."}</p></div>
           <Divider />
           <div className="report-outline-note"><Icon name="info" size={15} /><span>{NO_BUILD_DISCLAIMER} {REPORT_REDACTION_NOTICE}</span></div>
         </Card>
@@ -1050,7 +1076,7 @@ export function SettingsPage({ preferences, onPatchPreferences, theme, onSetThem
         </Card>
         <Card className="settings-card">
           <div className="settings-card-heading"><div><span className="panel-kicker">Input defaults</span><h2>Start with the right surface</h2></div><Icon name="sliders" size={18} /></div>
-          <div className="settings-option-group"><span className="settings-option-label">Default input mode</span><div className="settings-segmented"><button className={preferences.defaultInputMode === "paste" ? "active" : ""} onClick={() => onPatchPreferences({ defaultInputMode: "paste" })} type="button"><Icon name="terminal" size={15} /> Paste</button><button className={preferences.defaultInputMode === "file" ? "active" : ""} onClick={() => onPatchPreferences({ defaultInputMode: "file" })} type="button"><Icon name="file-code" size={15} /> File</button></div></div>
+          <div className="settings-option-group"><span className="settings-option-label">Default input mode</span><div className="settings-segmented" role="group" aria-label="Default input mode"><button aria-pressed={preferences.defaultInputMode === "paste"} className={preferences.defaultInputMode === "paste" ? "active" : ""} onClick={() => onPatchPreferences({ defaultInputMode: "paste" })} type="button"><Icon name="terminal" size={15} /> Paste</button><button aria-pressed={preferences.defaultInputMode === "file"} className={preferences.defaultInputMode === "file" ? "active" : ""} onClick={() => onPatchPreferences({ defaultInputMode: "file" })} type="button"><Icon name="file-code" size={15} /> File</button></div></div>
           <div className="settings-option-group"><span className="settings-option-label">Display density</span><div className="settings-segmented"><button aria-pressed={preferences.displayDensity === "comfortable"} className={preferences.displayDensity === "comfortable" ? "active" : ""} onClick={() => onPatchPreferences({ displayDensity: "comfortable" })} type="button">Comfortable</button><button aria-pressed={preferences.displayDensity === "compact"} className={preferences.displayDensity === "compact" ? "active" : ""} onClick={() => onPatchPreferences({ displayDensity: "compact" })} type="button">Compact</button></div></div>
           <div className="settings-safe-note"><Icon name="shield-check" size={15} /><span><strong>Local analyzer {engineLabel.toLowerCase()}</strong><small>Rule catalog {analysis.ruleCatalogVersion}. No command execution or network request is required.</small></span><Badge tone={engineTone} dot>{engineLabel}</Badge></div>
           <Button onClick={() => { onPatchPreferences({ theme: "system", defaultInputMode: "paste", displayDensity: "comfortable", reducedMotion: false, showLineNumbers: true, showEvidenceContext: true }); onNotify("Preferences reset to defaults."); }} variant="quiet" icon="refresh">Reset preferences</Button>
@@ -1062,6 +1088,7 @@ export function SettingsPage({ preferences, onPatchPreferences, theme, onSetThem
 
 export function HelpPage({ onNavigate, onNotify, analysis, analysisError, isAnalyzing, verification }: WorkspacePageProps) {
   const [openQuestion, setOpenQuestion] = useState<string | null>("engine");
+  const faqId = useId();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const questions = [
     { id: "engine", question: "What powers an analysis?", answer: isAnalyzing ? "The local rule catalog is analyzing the current text now." : `The browser-local analyzer is ${analysisError ? "reporting an engine error" : "available"} and identifies supported diagnostics without executing the log. Its current catalog is ${analysis.ruleCatalogVersion}.` },
@@ -1075,10 +1102,10 @@ export function HelpPage({ onNavigate, onNotify, analysis, analysisError, isAnal
       <WorkspacePageHeader actions={<Button onClick={() => setShortcutsOpen(true)} variant="secondary" icon="command">Keyboard shortcuts</Button>} description="A short guide to the real local analyzer, evidence surfaces, and comparison labels in BuildMedic Lab." eyebrow="System / help" title="Find your way around." />
       <div className="help-layout">
         <Card className="help-getting-started"><div className="help-orbit" aria-hidden="true"><span /><span /><span /><span /></div><span className="eyebrow">First pass</span><h2>Start with a local log.</h2><p>Open New analysis, paste or upload text, then follow the returned evidence into the viewer or verification surface.</p><div className="help-steps"><div><span>01</span><strong>Paste or upload</strong></div><div><span>02</span><strong>Analyze log</strong></div><div><span>03</span><strong>Review evidence</strong></div></div><Button onClick={() => onNavigate("/app/new-analysis")} icon="arrow-right" iconPosition="right">Start an analysis</Button></Card>
-        <Card className="help-faq-card"><div className="panel-heading"><div><span className="panel-kicker">Common questions</span><h2>Stay oriented</h2></div><Icon name="circle-help" size={18} /></div><div className="faq-list">{questions.map((item) => <div className={`faq-item${openQuestion === item.id ? " open" : ""}`} key={item.id}><button onClick={() => setOpenQuestion((current) => current === item.id ? null : item.id)} type="button"><span>{item.question}</span><Icon name={openQuestion === item.id ? "chevron-down" : "chevron-right"} size={15} /></button>{openQuestion === item.id ? <p>{item.answer}</p> : null}</div>)}</div></Card>
+        <Card className="help-faq-card"><div className="panel-heading"><div><span className="panel-kicker">Common questions</span><h2>Stay oriented</h2></div><Icon name="circle-help" size={18} /></div><div className="faq-list">{questions.map((item) => <div className={`faq-item${openQuestion === item.id ? " open" : ""}`} key={item.id}><button aria-expanded={openQuestion === item.id} aria-controls={`${faqId}-${item.id}-answer`} onClick={() => setOpenQuestion((current) => current === item.id ? null : item.id)} type="button"><span>{item.question}</span><Icon name={openQuestion === item.id ? "chevron-down" : "chevron-right"} size={15} /></button><p hidden={openQuestion !== item.id} id={`${faqId}-${item.id}-answer`}>{item.answer}</p></div>)}</div></Card>
       </div>
       <Card className="help-contact-card"><span className="help-contact-icon"><Icon name="message-circle" size={20} /></span><div><span className="panel-kicker">Need a closer look?</span><h2>Keep the evidence inspectable.</h2><p>Use the log viewer for sanitized source lines, Analysis for ranked findings, and Reports for a plain-text summary.</p></div><div className="help-contact-actions"><AppLink className="text-link" onNavigate={onNavigate} to="/app/log-viewer">Open log viewer <Icon name="arrow-right" size={14} /></AppLink><AppLink className="text-link" onNavigate={onNavigate} to="/app/reports">Open reports <Icon name="arrow-right" size={14} /></AppLink></div></Card>
-      <Modal description="These shortcuts keep navigation and review local to the workspace." onClose={() => setShortcutsOpen(false)} open={shortcutsOpen} title="Keyboard shortcuts" size="sm"><div className="shortcut-list"><div><span>Open command center</span><Kbd>⌘ K</Kbd></div><div><span>Close dialog</span><Kbd>Esc</Kbd></div><div><span>Focus search on viewer</span><Kbd>/</Kbd></div><div><span>Copy selected evidence</span><Kbd>⌘ C</Kbd></div></div><Divider /><button className="command-note" onClick={() => onNotify("Use the visible controls to review evidence and comparison results.")} type="button"><Icon name="info" size={15} /> Shortcuts never execute build commands.</button></Modal>
+      <Modal description="These shortcuts keep navigation and review local to the workspace." onClose={() => setShortcutsOpen(false)} open={shortcutsOpen} title="Keyboard shortcuts" size="sm"><div className="shortcut-list"><div><span>Open command center</span><Kbd>Ctrl/Cmd K</Kbd></div><div><span>Close dialog</span><Kbd>Esc</Kbd></div><div><span>Focus search on viewer</span><Kbd>/</Kbd></div><div><span>Compare verification inputs</span><Kbd>Ctrl/Cmd Enter</Kbd></div><div><span>Copy selected evidence</span><Kbd>Ctrl/Cmd C</Kbd></div></div><Divider /><button className="command-note" onClick={() => onNotify("Use the visible controls to review evidence and comparison results.")} type="button"><Icon name="info" size={15} /> Shortcuts never execute build commands.</button></Modal>
     </div>
   );
 }

@@ -68,7 +68,7 @@ describe("live workspace frontend flow", () => {
     render(<NewAnalysisPage {...makeProps({ preferences: { ...DEFAULT_USER_PREFERENCES, defaultInputMode: "file" } })} />);
 
     expect(screen.getByRole("textbox", { name: "Build log" })).toHaveValue("");
-    expect(screen.getByRole("tab", { name: "Upload file" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "Upload file" })).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "Load example input" }));
 
@@ -99,7 +99,7 @@ describe("live workspace frontend flow", () => {
 
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Build log" })).toHaveValue(DIAGNOSTIC_LOG));
     expect(screen.getByText("build.log")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Upload file" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "Upload file" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("renders actual complete findings, version, confidence, search, severity, and evidence controls", () => {

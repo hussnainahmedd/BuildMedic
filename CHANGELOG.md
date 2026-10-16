@@ -5,6 +5,16 @@ currently in an unreleased local-MVP checkpoint.
 
 ## [Unreleased]
 
+### Final QA repairs
+
+- Fixed live System-theme updates and light-mode text/button contrast.
+- Added dialog/drawer focus containment and restoration, background isolation,
+  skip links, current-page semantics, and visible keyboard toggle focus.
+- Repaired command navigation, report/demo tabs, viewer search and verification
+  shortcuts, form error focus, disclosure states, and input-mode semantics.
+- Retained the existing design and local diagnostic pipeline; added 31 focused
+  UI regressions. Verified 173 unit/DOM tests and production Chromium checks.
+
 ### Added
 
 - Documented the BuildMedic product requirements, MVP boundaries, personas, and
