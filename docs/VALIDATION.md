@@ -1,7 +1,9 @@
 # BuildMedic Validation and Accessibility
 
 **Status:** The shared validation and analysis boundary is implemented for the
-local MVP. Manual accessibility and cross-browser verification remain pending.
+local MVP. Production Chromium/Firefox/WebKit, keyboard focus and automated axe
+checks have passed the final QA suite. Manual screen-reader and physical-device
+verification remain pending; no complete WCAG certification is claimed.
 
 ## 1. Validation model
 
@@ -37,6 +39,8 @@ still requires post-read text validation; extensions alone never bypass it.
 Line endings are normalized after validation while source line numbers remain
 stable. Large inspection runs in the worker; unavailable-worker recovery asks
 for at most 64 KiB combined input or a worker-capable browser.
+The 5 MiB warning is visible on analysis and comparison inputs and explicitly
+notes processing/memory cost. It is not a promise that the maximum size is fast.
 
 ## 3. Verification form
 

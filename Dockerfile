@@ -8,6 +8,14 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY . .
 RUN npm run build
 
+# Optional QA image. Browser OS dependencies are installed only inside Docker,
+# never via sudo/global installs on the developer or CI host.
+FROM build AS browser-qa
+
+RUN npm run browser:install -- --with-deps --no-shell chromium firefox webkit
+
+CMD ["npm", "run", "test:e2e"]
+
 FROM node:22.22.3-bookworm-slim AS runtime
 
 ENV NODE_ENV=production

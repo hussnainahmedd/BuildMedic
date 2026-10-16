@@ -18,6 +18,16 @@ currently in an unreleased local-MVP checkpoint.
   retained matching semantics and added seven domain regressions. The isolated
   1 MiB/10 MiB pipeline run observed p95 223/1628 ms; the latter has only ten
   samples. Full method, sample counts and limitations are in `docs/PERFORMANCE.md`.
+- Added lockfile-pinned, project-local Playwright/axe QA: 42 scenarios passed
+  locally across Chromium, Firefox and WebKit, including the genuine production
+  module worker, file picker/drop, report downloads, hostile text, privacy,
+  failure/cancel recovery, mobile layouts and automated accessibility scans.
+- Fixed WebKit pointer-opened dialog focus restoration, nested badge contrast,
+  and missing large-input warnings. Added a separate production-browser timing
+  command; large-log UI pauses and unverified peak memory remain disclosed.
+- Added an optional Docker browser-QA target and CI container/browser checks,
+  dependency audit, benchmark and retained synthetic evidence. Production
+  runtime remains non-root and free of test/browser dependencies.
 
 ### Added
 
@@ -65,10 +75,12 @@ currently in an unreleased local-MVP checkpoint.
   [38897847991](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38897847991)
   at `3f8318f`, including hardening code `4ae575e` and production worker delivery.
 
-### Pending after this checkpoint
+### Historical gaps at the earlier hardening checkpoint
 
-- Browser performance/peak memory, manual accessibility/security, cross-browser
-  review, and actual production-worker execution in a browser remain unverified.
+- Browser/worker execution, cross-browser automation and performance were not
+  verified at that earlier checkpoint; final QA evidence now lives in
+  `docs/QA-RELEASE.md`. Peak memory and manual assistive-technology review remain
+  open; browser automation is not a security or accessibility certification.
 - Docker cannot be run on the Windows development machine; the Linux image and
   HTTP checks passed in the run above. Future code revisions need their own
   independently checked CI result.

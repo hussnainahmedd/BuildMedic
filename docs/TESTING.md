@@ -1,9 +1,11 @@
 # BuildMedic Testing Strategy
 
 **Status:** The offline unit and component suite is implemented for the current
-local MVP: **142 tests in 12 files passed** locally on Node.js 22.22.3.
-Synthetic pipeline timings are recorded in `docs/PERFORMANCE.md`; manual
-accessibility, cross-browser, and real-browser automation remain unverified.
+local MVP: **180 tests in 15 files passed** locally on Node.js 22.22.3.
+**42 production Playwright scenarios passed** across Chromium, Firefox and
+WebKit on Windows. Automated keyboard, responsive and axe checks are included;
+manual screen-reader/physical-device review is still unverified. See
+`docs/QA-RELEASE.md` and `docs/PERFORMANCE.md` for evidence and limits.
 
 ## 1. Testing principles
 
@@ -112,6 +114,7 @@ npm run lint
 npm test
 npm run build
 npm run smoke
+npm run benchmark
 ```
 
 `npm ci` installs dependencies and may need network/cache access; subsequent
@@ -123,24 +126,57 @@ or the default test timeout.
 Coverage includes domain rules/identity/comparison/redaction, malformed storage,
 cache bounds and clear behavior, worker transport/abort/timeout/fallback, stale
 file reads, viewer/report sanitization, public claims, and real App workflows.
-The worker transport tests use controlled workers and the real task runtime;
-they do not execute the production module worker inside a browser.
+The unit worker transport tests use controlled workers and the real task runtime;
+the separate Playwright suite executes the genuine production module worker.
 
 `npm run smoke` starts an ephemeral production server after `npm run build`,
 checks `/health`, SPA paths, the actual emitted worker JS and CSP, asset 404,
 and write-method 405, then stops its server. To check a running container use
 `node tests/production-smoke.mjs http://127.0.0.1:4173`. It verifies HTTP delivery,
-not browser execution or CSP enforcement. GitHub Actions repeats the checks on
-Ubuntu 24.04 and builds/starts the Docker image. Docker is unavailable locally.
+not browser execution or CSP enforcement by itself. GitHub Actions repeats the
+checks on Ubuntu 24.04 and builds/starts the non-root Docker image; its separate
+browser QA image runs the real-browser suite against that runtime container.
+Docker is unavailable locally.
 
 Local typecheck, lint, build, and production smoke passed. The online release
 check `npm audit --audit-level=high` found zero vulnerabilities on 2026-10-16.
 Run `npm run benchmark` for the separate bounded timing suite. Neither audit
 nor benchmark substitutes for the offline regression suite.
 
-Browser automation could not attach to the local preview in this environment.
-No real-browser E2E, cross-browser, screen-reader, keyboard, or WCAG pass is
-claimed from DOM/HTTP tests. These remain explicit release-review tasks.
+### Reproducible browser QA
+
+```sh
+npm run browser:install -- --no-shell chromium firefox webkit
+npm run build
+npm run test:e2e
+npm run benchmark:browser
+```
+
+The wrapper keeps binaries project-local in `.cache/ms-playwright/`. Clean Linux
+browser OS prerequisites are supplied by `docker build --target browser-qa -t
+buildmedic:qa .` followed by `docker run --rm --shm-size=1g buildmedic:qa`; no host
+sudo/global installation is needed. Full setup is also in the README.
+
+Tests use the production server at loopback port 4183, not Vite or JSDOM. An
+explicit `BUILDMEDIC_BASE_URL` points them at the already-running CI production
+container instead. Do not point these synthetic QA tests at an unrelated service.
+They test actual upload/FileReader, DataTransfer drops, worker execution,
+downloaded report contents, storage clearing, recovery, shortcuts, dialogs and
+320/390/768/1440 px layouts. Cancellation deliberately injects a stalled worker
+boundary; independent cases test the actual worker. Clipboard/storage denials
+are injected, while the actual report Blob download is tested in all engines.
+
+Axe 4.14 checks WCAG 2 A/AA, 2.1 AA and 2.2 AA tags on dark/light public,
+populated workspace, dialog and mobile input/sidebar surfaces. Zero violations
+in those scans is not a manual accessibility or complete WCAG certification.
+The two theme cases have separate bounded timeouts, retaining every assertion;
+the combined 24+-scan case originally exceeded its test-runner timeout.
+
+`.cache/browser-results/` contains JSON results and synthetic screenshots; failed
+cases also retain a trace. CI uploads `browser-qa-evidence` for 14 days. Performance
+measurement disables snapshots/tracing, warms once and takes three samples per
+size; it saves JSON in `.cache/browser-performance/`. No test artifact may
+contain a real customer/private log.
 
 ## 6. Coverage and release gates
 

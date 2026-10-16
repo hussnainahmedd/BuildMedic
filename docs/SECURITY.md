@@ -1,9 +1,10 @@
 # BuildMedic Security
 
 **Status:** Core local-MVP controls are implemented and covered by regression
-tests. Pattern-based redaction, browser behavior, dependency supply-chain
-review, and deployment configuration still need a broader release security
-review.
+tests. Final QA also exercised hostile text, redaction, storage/export privacy,
+upload limits and worker recovery in three real browser engines. This is not a
+penetration test, exhaustive secret detector, or dependency supply-chain audit;
+see `QA-RELEASE.md` for exact coverage and remaining limits.
 
 ## 1. Security objectives
 
@@ -90,8 +91,8 @@ coverage; unknown secret formats can still escape detection. Review exports.
 - Review licenses and transitive dependency changes in pull requests.
 - Run `npm audit --audit-level=high` during release review, treating high/critical
   production-path issues as blockers unless explicitly accepted. The local
-  2026-10-16 audit reported zero vulnerabilities; audit is online and not part of
-  the offline test command or current CI workflow. It is not a full security review.
+  2026-10-16 audit reported zero vulnerabilities; audit is online, included in CI,
+  and separate from the offline test command. It is not a full security review.
 - Avoid lifecycle scripts that execute unreviewed code during install.
 - Do not put private keys, tokens, or machine-specific paths in the repository.
 - Build artifacts must be reproducible from a clean checkout and documented
@@ -101,7 +102,11 @@ The production server sends a restrictive CSP including `worker-src 'self'`,
 rejects unsupported methods, and returns 404 for missing assets rather than SPA
 HTML. The host must provide HTTPS; HTTP smoke checks do not verify browser CSP
 enforcement. Same-origin extensions, developer tools, and compromised browsers
-are not isolation boundaries this application can control.
+are not isolation boundaries this application can control. The production
+browser suite observed no external requests in its normal local analysis/export
+journey; it does not prove non-exfiltration against a compromised browser or
+future code. Playwright/axe/Node typings are development-only dependencies,
+lockfile-pinned and excluded from the final runtime image.
 
 ## 7. Vulnerability handling
 

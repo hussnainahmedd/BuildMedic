@@ -35,10 +35,19 @@ jobs:
       - name: Run npm build
         run: npm run build
 
+      - name: Audit dependency advisories
+        run: npm audit --audit-level=high
+
+      - name: Run bounded synthetic benchmarks
+        run: npm run benchmark
+
       - name: Build Docker image
         run: docker build --pull --file Dockerfile --tag buildmedic:ci .
 
-      - name: Start container and run HTTP smoke check
+      - name: Build isolated browser QA image
+        run: docker build --file Dockerfile --target browser-qa --tag buildmedic:browser-ci .
+
+      - name: Start non-root production container and run HTTP and real-browser checks
         shell: bash
         run: |
           set -euo pipefail
@@ -61,3 +70,19 @@ jobs:
           done
 
           node tests/production-smoke.mjs http://127.0.0.1:4173
+          test "$(docker inspect --format '{{.Config.User}}' buildmedic-ci)" = "buildmedic"
+          mkdir -p .cache/browser-results
+          docker run --rm --network host --shm-size=1g \
+            --env BUILDMEDIC_BASE_URL=http://127.0.0.1:4173 \
+            --volume "$PWD/.cache/browser-results:/app/.cache/browser-results" \
+            buildmedic:browser-ci
+
+      - name: Retain synthetic browser screenshots and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-qa-evidence
+          path: .cache/browser-results/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

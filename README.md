@@ -22,13 +22,16 @@ uncertain transitions. It never executes commands or sends log text to a
 backend. The synthetic example input remains explicitly labeled and is only an
 input convenience.
 
-Verified locally with Node.js 22.22.3: typecheck, lint, **142 Vitest tests**,
-production build, and `npm run smoke` (health, SPA, worker asset, CSP, 404, 405).
+Final QA locally verified Node.js 22.22.3, typecheck, lint, **180 Vitest tests**,
+production build/HTTP smoke, and **42 Playwright scenarios** across Chromium,
+Firefox and WebKit. The real production worker, upload/drop, comparison,
+history/export, failure recovery and 320–1440 px layouts were exercised.
+Automated axe checks cover dark/light populated surfaces and mobile navigation;
+they do not certify screen-reader usability or full WCAG conformance.
 `npm audit --audit-level=high` reported zero vulnerabilities. Docker is unavailable
-on the Windows development machine; Linux CI verifies the container separately.
-HTTP smoke and DOM tests do not prove real-browser worker execution, cross-browser
-compatibility, or manual accessibility. See [testing](docs/TESTING.md) and
-[measured performance and unmet targets](docs/PERFORMANCE.md).
+on this Windows machine; Linux CI builds and tests the non-root production
+container, including real browsers. See the [release QA report](docs/QA-RELEASE.md),
+[testing](docs/TESTING.md), and [measured performance/limitations](docs/PERFORMANCE.md).
 
 ## Implemented MVP capabilities
 
@@ -49,6 +52,8 @@ compatibility, or manual accessibility. See [testing](docs/TESTING.md) and
   log-derived fingerprints, and is schema-whitelisted and bounded to 24 entries.
 - Cancellable worker processing with stale-result rejection and a 30-second
   timeout; worker-unavailable fallback accepts only 64 KiB combined input.
+- Visible large-log warning from 5 MiB; maximum-size inputs can still cause
+  noticeable UI pauses and significant memory use, especially on smaller devices.
 - Whole-log sanitized viewer with 200-line pages and bounded, disclosed copy;
   session-only cache limited to four results/25 MiB of aggregate raw log input
   (not a total browser-memory cap).
@@ -94,6 +99,7 @@ make network requests.
 - [Deployment](docs/DEPLOYMENT.md)
 - [API and interfaces](docs/API.md)
 - [Changelog](CHANGELOG.md)
+- [Final QA and release readiness](docs/QA-RELEASE.md)
 
 ## Declared stack
 
@@ -134,6 +140,27 @@ does not make external network requests (server tests bind only loopback).
 Dependency installation needs registry access or an already-populated npm cache;
 offline-first describes local analysis, not first-time package installation.
 `npm run benchmark` runs the separate synthetic timing suite.
+`npm run benchmark:browser` measures the real Chromium worker/UI (three samples
+per size, not a robust p95 or total-memory measurement).
+
+### Real-browser checks
+
+On Windows/macOS with supported browser prerequisites:
+
+```sh
+npm run browser:install -- --no-shell chromium firefox webkit
+npm run build
+npm run test:e2e
+npm run benchmark:browser
+```
+
+Browser binaries remain in `.cache/ms-playwright/`; nothing is installed globally.
+First-time browser downloads need network access. Browser tests then use only
+loopback/synthetic data and the production server on port `4183`. They refuse
+to reuse an unrelated running server. Results/screenshots are in
+`.cache/browser-results/`; performance JSON is in `.cache/browser-performance/`.
+On clean Linux, use the QA Docker target below to install browser system
+dependencies inside the image rather than modifying the host with sudo.
 
 ## Environment
 
@@ -175,17 +202,31 @@ docker run --rm --name buildmedic-local -p 4173:4173 buildmedic:local
 Open `http://127.0.0.1:4173`; stop the foreground container with Ctrl+C. See
 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
+The optional browser QA target is separate from the minimal non-root runtime:
+
+```sh
+docker build --target browser-qa -t buildmedic:qa .
+docker run --rm --shm-size=1g buildmedic:qa
+```
+
+This starts its own production server inside the QA container and runs the
+three-engine suite. CI instead points the QA image at the separate production
+container, preserving screenshots as an Actions artifact. The default Docker
+target remains the production runtime, without browser/test dependencies.
+
 ### CI
 
 The repository contains a Linux CI workflow at
 `.github/workflows/ci.yml`. It targets Ubuntu 24.04 with the exact `.nvmrc` runtime,
-installs from the lockfile, runs test/typecheck/lint/build scripts, builds the
-Docker image, starts the container, and runs the production HTTP smoke. Any missing file
-or failing command fails the workflow.
+installs from the lockfile, runs test/typecheck/lint/build/audit/benchmark scripts,
+builds the Docker images, starts the non-root production container, and runs HTTP
+smoke plus Chromium/Firefox/WebKit checks against it. Synthetic screenshots and
+failure traces are retained for 14 days. Any missing file or failing assertion
+fails the workflow. Current revision receipts are in `docs/QA-RELEASE.md`.
 
 Hardening code `4ae575e` (included in `3f8318f`) passed
 [Linux/Docker CI run 38897847991](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38897847991).
-This verifies build and HTTP delivery, not real-browser worker execution.
+This historical run verified build and HTTP delivery only; it predates browser QA.
 
 ### Deployment
 
