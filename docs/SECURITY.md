@@ -98,7 +98,8 @@ coverage; unknown secret formats can still escape detection. Review exports.
 - Build artifacts must be reproducible from a clean checkout and documented
   toolchain.
 
-The production server sends a restrictive CSP including `worker-src 'self'`,
+The production server and Vercel configuration send an aligned restrictive CSP
+including `worker-src 'self'`,
 rejects unsupported methods, and returns 404 for missing assets rather than SPA
 HTML. The host must provide HTTPS; HTTP smoke checks do not verify browser CSP
 enforcement. Same-origin extensions, developer tools, and compromised browsers
@@ -107,6 +108,30 @@ browser suite observed no external requests in its normal local analysis/export
 journey; it does not prove non-exfiltration against a compromised browser or
 future code. Playwright/axe/Node typings are development-only dependencies,
 lockfile-pinned and excluded from the final runtime image.
+
+### Native WebKit select CSP compatibility
+
+WebKit 27.2 emits a genuine `style-src-attr` violation when creating a native
+`<select>`: its user-agent shadow tree parses the exact inline declaration
+`text-overflow:inherit`. This reproduces with plain `document.createElement`,
+without React or screenshot tooling. Removing the existing sort control or
+allowing all inline styling would be unnecessary regressions.
+
+Both hosts therefore allow only that declaration through
+`style-src-attr 'unsafe-hashes' 'sha256-3oFxofzq3N//6J8H86e9ul4WT2OkJrtonB66gn/TLJw='`.
+The digest is SHA-256 of the exact UTF-8 text above, with no trailing semicolon.
+This narrowly permits that harmless declaration wherever it occurs; it is not a
+general inline-style exemption. `style-src 'self'`, `script-src 'self'`, object
+blocking and same-origin module workers remain enforced, with no `unsafe-inline`
+or `unsafe-eval`. Browser regressions separately prove native controls, workers,
+comparison and Blob export work, and arbitrary inline scripts/style attributes/
+style elements remain blocked. Older browsers without `unsafe-hashes` support
+retain the restrictive fallback policy; physical Safari/iOS is not certified.
+
+Permissions-Policy disables unused camera, microphone, geolocation, payment and
+USB APIs without disabling clipboard export. Both hosts also set nosniff, DENY
+framing plus CSP `frame-ancestors 'none'`, no-referrer, same-origin COOP/CORP and
+one-year HSTS (without imposing policy on unrelated subdomains).
 
 ## 7. Vulnerability handling
 

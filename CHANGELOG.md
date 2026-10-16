@@ -5,6 +5,20 @@ currently in an unreleased local-MVP checkpoint.
 
 ## [Unreleased]
 
+### Production QA repairs
+
+- Added filesystem-first Vercel SPA fallback, preserving real missing-asset 404s
+  and React's branded unknown-route screen; aligned strict security headers with
+  the Render server, including Permissions-Policy and framing protection.
+- Isolated WebKit's native-select `text-overflow:inherit` CSP conflict and allowed
+  only its exact style-attribute hash, without unsafe-inline/eval or UI replacement.
+- Repaired populated Analysis at 320 px through shrinkable grid tracks and
+  wrapping filter rows; retained full evidence/log access, mobile theme toggles
+  and larger primary/header touch targets. Added the existing-brand SVG favicon.
+- Added 69 unit/HTTP/config regressions and 15 three-engine production cases;
+  documented host setup, deployment revision gates and CSP behavior. The
+  diagnostic engine, dependencies, runtime pin and historical evidence are unchanged.
+
 ### Final QA repairs
 
 - Fixed live System-theme updates and light-mode text/button contrast.

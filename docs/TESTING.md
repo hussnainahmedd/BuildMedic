@@ -175,6 +175,24 @@ Scans await fonts and finite CSS transitions/entrance animations rather than
 measuring intermediate transparent or mixed-theme colors on faster CI runners;
 contrast and every other axe assertion remain enabled.
 
+The production-repair suite adds 15 browser cases (five per engine) to the
+existing 42. It covers every direct React route and refresh, trailing slashes,
+branded unknown routes, missing asset GET/HEAD responses and the SVG favicon.
+Populated Analysis is now explicitly included in the original layout loop; new
+long-evidence checks inspect both element bounds and main scroll width at all
+four widths, so global overflow clipping cannot disguise the 320 px regression.
+Mobile theme access and 24 px control/44 px small-screen header targets are checked.
+
+`production-qa.spec.ts` separates a screenshot-free, zero-console-error CSP
+workflow from intentional negative CSP tests. The positive case exercises native
+selects, two genuine production workers (analysis/comparison), dialogs, report
+tabs and sanitized Blob download. The negative case asserts arbitrary inline
+scripts, style attributes and style elements remain blocked. Do not infer a CSP
+pass from screenshot-containing tests: WebKit screenshots can inject their own
+empty style element. See [SECURITY.md](SECURITY.md) for the native-select hash.
+Run `npm run test:e2e -- production-qa.spec.ts` for just these focused regressions.
+Live runs require the revision/asset gates in [DEPLOYMENT.md](DEPLOYMENT.md).
+
 `.cache/browser-results/` contains JSON results and synthetic screenshots; failed
 cases also retain a trace. CI uploads `browser-qa-evidence` for 14 days. Performance
 measurement disables snapshots/tracing, warms once and takes three samples per

@@ -9,6 +9,8 @@ const distDirectory = path.join(rootDirectory, "dist");
 const indexPath = path.join(distDirectory, "index.html");
 const host = process.env.HOST || "0.0.0.0";
 const port = Number.parseInt(process.env.PORT || "4173", 10);
+const deploymentRevision = process.env.RENDER_GIT_COMMIT || process.env.BUILDMEDIC_COMMIT || "";
+const revision = /^[a-f0-9]{40}$/i.test(deploymentRevision) ? deploymentRevision.toLowerCase() : undefined;
 
 const contentTypes = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -22,9 +24,14 @@ const contentTypes = new Map([
 ]);
 
 const securityHeaders = {
-  "Content-Security-Policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'",
+  // WebKit's native <select> shadow tree parses exactly "text-overflow:inherit".
+  // Permit only that declaration, not arbitrary inline attributes/stylesheets.
+  "Content-Security-Policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-hashes' 'sha256-3oFxofzq3N//6J8H86e9ul4WT2OkJrtonB66gn/TLJw='",
   "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
   "Referrer-Policy": "no-referrer",
+  "Strict-Transport-Security": "max-age=31536000",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",
 };
@@ -55,7 +62,7 @@ function safePathname(url) {
     return null;
   }
 
-  if (!pathname.startsWith("/") || pathname.includes("\0")) {
+  if (!pathname.startsWith("/") || pathname.includes("\0") || pathname.includes("\\")) {
     return null;
   }
 
@@ -82,7 +89,7 @@ async function serveFile(request, response, filePath) {
   }
 
   const extension = path.extname(filePath).toLowerCase();
-  const isAsset = filePath.startsWith(path.join(distDirectory, "assets"));
+  const isAsset = filePath.startsWith(`${path.join(distDirectory, "assets")}${path.sep}`);
   response.writeHead(200, {
     ...securityHeaders,
     "Cache-Control": isAsset ? "public, max-age=31536000, immutable" : "no-cache",
@@ -121,7 +128,7 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (requestUrl.pathname === "/health") {
-    sendJson(response, 200, { service: "buildmedic", status: "ok" });
+    sendJson(response, 200, { service: "buildmedic", status: "ok", ...(revision ? { revision } : {}) });
     return;
   }
 
@@ -136,9 +143,10 @@ const server = createServer(async (request, response) => {
       return;
     }
 
-    // Missing scripts/workers/assets must not receive a successful HTML SPA
-    // fallback; otherwise a deployment failure looks like a valid module fetch.
-    if (path.extname(requestUrl.pathname) || requestUrl.pathname.startsWith("/assets/")) {
+    // Match the Vercel fallback after the filesystem check. Dots anywhere in a
+    // missing path, the assets namespace, and ambiguous percent-encoded paths
+    // must not return a successful HTML response to a script/worker request.
+    if (!/^\/(?!assets(?:\/|$))[^.%]*$/.test(requestUrl.pathname)) {
       sendText(response, 404, "Not found");
       return;
     }

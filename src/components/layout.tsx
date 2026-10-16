@@ -20,7 +20,7 @@ export function BrandMark({ compact = false }: { compact?: boolean }) {
 
 export function ThemeToggle({ theme, onToggle }: { theme: "dark" | "light"; onToggle: () => void }) {
   const label = theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
-  return <IconButton icon={theme === "dark" ? "sun" : "moon"} label={label} onClick={onToggle} />;
+  return <IconButton className="theme-toggle" icon={theme === "dark" ? "sun" : "moon"} label={label} onClick={onToggle} />;
 }
 
 function SkipLink() {

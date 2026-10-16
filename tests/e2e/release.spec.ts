@@ -381,6 +381,9 @@ test("desktop, tablet and mobile layouts retain usable navigation, dialogs and c
       await expect(menu).toBeFocused();
     }
     await analyze(page);
+    const analysisOverflow = await page.locator("main").evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
+    expect.soft(analysisOverflow.scroll, `Populated Analysis at ${viewport.width}px`).toBeLessThanOrEqual(analysisOverflow.client + 1);
+    await page.screenshot({ path: testInfo.outputPath(`analysis-${viewport.width}.png`), fullPage: true });
     for (const name of ["New analysis", "Log viewer", "Verification", "History", "Reports", "Settings", "Help"]) {
       await navigate(page, name);
       const overflow = await page.locator("main").evaluate((element) => ({ scroll: element.scrollWidth, client: element.clientWidth }));
