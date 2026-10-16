@@ -97,15 +97,19 @@ without executing commands or uploading logs.
 ## Phase 5 — Hardening and release
 
 **Priority:** P1
-**Status:** Pending after this checkpoint.
+**Status:** Implemented hardening milestone; broader release review remains open.
 
-- Measure representative input-size and rendering budgets and record actual
-  results.
-- Complete security, dependency, accessibility, and cross-browser reviews.
-- Re-run and inspect Linux CI/Docker verification after this checkpoint is
-  pushed.
-- Finish any remaining public-copy/documentation review and publish release
-  notes with known rule coverage and limitations.
+- Completed: cancellable bounded worker processing, conservative comparison,
+  stronger multiline redaction, schema-only metadata, bounded session/viewer
+  data, stale-file/result protection, and static-server/production worker smoke.
+- Completed: 142 local regression tests, typecheck/lint/build/HTTP smoke, online
+  dependency audit (zero vulnerabilities), honest public copy and documentation.
+- Measured: synthetic pipeline baseline through 25 MiB; 1 MiB and 10 MiB p95
+  targets not met. See `docs/PERFORMANCE.md`; rendering/memory remain unmeasured.
+- Pending: manual security/accessibility and real-browser/cross-browser review,
+  production worker execution in a browser, and performance follow-up.
+- Verify each new pushed Linux CI/Docker run independently; historical runs do
+  not establish a later commit's result.
 
 **Exit criteria:** Required quality gates are green in Linux CI and the release
 artifacts are reproducible from a clean checkout.

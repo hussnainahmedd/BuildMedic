@@ -29,9 +29,14 @@ matched. “Valid, no supported diagnosis” is a distinct state.
 | Analyze action | Disabled only when submission cannot succeed; explain why | `Add a log before analyzing.` |
 | Analysis result | No rule match is not a validation error | `No supported diagnostic matched this log.` |
 
-The final byte limit must come from the shared domain policy so pasted and file
-inputs cannot drift. Line endings are normalized after validation while source
-line numbers remain stable.
+Defaults in `src/lib/validation.ts` are 25 MiB, 100,000 lines, and 16,384
+characters per line; a warning begins at 5 MiB. Paste and file content use the
+same policy. Empty browser MIME metadata is accepted only for allowlisted text
+extensions (`log`, `txt`, `text`, `json`, `jsonl`, `ndjson`, `csv`, `out`) and
+still requires post-read text validation; extensions alone never bypass it.
+Line endings are normalized after validation while source line numbers remain
+stable. Large inspection runs in the worker; unavailable-worker recovery asks
+for at most 64 KiB combined input or a worker-capable browser.
 
 ## 3. Verification form
 
@@ -65,6 +70,10 @@ labels.
   still relevant without user action.
 - If analysis fails unexpectedly, preserve the input and show a retry action;
   do not expose a stack trace or log payload in the message.
+- Abort file reads on replacement, clear, and unmount; reject stale read/task
+  results. Editing comparison inputs invalidates the prior comparison.
+- Viewer pages contain at most 200 sanitized lines. Line display is capped at
+  4,096 characters; sanitized copy is capped at 2 MiB and discloses truncation.
 
 ## 5. Accessibility requirements
 

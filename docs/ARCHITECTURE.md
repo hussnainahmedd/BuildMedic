@@ -24,7 +24,10 @@ src/
   diagnostics/    Rule catalog, finding construction, ranking, explanations
   verification/   Baseline/rerun comparison and verification outcomes
   types/          Shared domain contracts and discriminated result types
-  ui/             React views, interaction state, and presentation adapters
+  components/     Reusable React controls and layout
+  pages/          Public and workspace views
+  lib/            Validation, worker client, storage/cache, and reports
+  workers/        Module worker, typed protocol, and local runtime
 tests/
   fixtures/       Sanitized logs and expected analysis outcomes
   unit/           Domain and UI-adapter tests
@@ -37,9 +40,9 @@ remain independent of React, storage, and browser APIs.
 ## 3. Data flow
 
 ```text
-paste/file
+paste/file → cancellable FileReader (files only)
    ↓
-input validation and size check
+metadata/size check → validated worker message → content validation
    ↓
 normalization (encoding/newlines/line numbers)
    ↓
@@ -54,7 +57,10 @@ typed analysis result → React result view
                  optional baseline/rerun verification
 ```
 
-The UI owns transient interaction state. The domain pipeline receives explicit
+The UI owns transient interaction state. `LocalTaskClient` runs the pure pipeline
+in a module worker, limits pending work/time, and terminates it on cancellation.
+Only inputs totaling at most 64 KiB may fall back without worker support.
+The domain pipeline receives explicit
 values and returns serializable results. No module should read from the
 filesystem, run a process, or make a network request as part of analysis.
 
@@ -81,6 +87,12 @@ Verification compares structured baseline and rerun results. It matches by
 normalized rule/signature identity rather than array position and returns
 `resolved`, `persistent`, `new`, or `uncertain` states. It distinguishes no
 supported match from invalid input and never infers that a build passed.
+
+Catalog `buildmedic-rules-2` uses SHA-256 identities that preserve meaningful
+case/value distinctions while ignoring source-location/timestamp shifts.
+Duplicate, redaction-ambiguous, low-confidence, partial, or catalog-mismatched
+comparisons remain conservative. Completion requires explicit markers; absence
+of findings alone is never proof of a successful build.
 
 ### Types
 
@@ -164,8 +176,8 @@ absence of an MVP backend API.
 
 ## 9. Operational boundaries
 
-The browser bundle is the only required runtime for the MVP. A future static
-production image may be served by a minimal non-root web server. Build-time
+The browser bundle is the only required analysis runtime for the MVP. The included
+production image is served by a minimal non-root Node.js static server. Build-time
 tooling and deployment configuration must not introduce secrets into the
 client bundle. See `docs/SECURITY.md` and `docs/DEPLOYMENT.md`.
 
@@ -184,8 +196,17 @@ The current frontend keeps the engine seam visible rather than hiding it:
 - `src/data/` contains sanitized, explicitly marked example input and legacy
   presentation fixtures. The live workspace does not use fixture findings or
   fixture verification results as analysis output.
-- `src/lib/validation.ts` is a browser-independent input boundary that can be
-  reused when the live engine is connected.
+- `src/lib/validation.ts` is the browser-independent shared input boundary.
+- `src/lib/history.ts` reconstructs whitelisted preferences/metadata; arbitrary
+  storage fields, filenames, evidence, and log fingerprints are never retained.
+- `src/lib/session-cache.ts` bounds transient results to four entries and 25 MiB
+  aggregate raw-log UTF-8 bytes, not total JavaScript heap usage.
+- `src/workers/runtime.ts` retains only sanitized viewer lines between requests;
+  whole-log redaction precedes 200-line paging. It does not persist raw input.
+
+Clearing history/session also evicts session caches and verification drafts.
+Replacement reads and edits invalidate stale work before it can replace the
+current UI. Reloading preserves metadata, not reopenable raw logs/results.
 
 Navigation is intentionally implemented without a router dependency: internal
 paths use the History API and render from typed route boundaries. This keeps the

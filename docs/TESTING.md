@@ -1,8 +1,9 @@
 # BuildMedic Testing Strategy
 
 **Status:** The offline unit and component suite is implemented for the current
-local MVP. Performance measurement, manual accessibility, cross-browser, and
-browser-level automation remain release-hardening work.
+local MVP: **142 tests in 12 files passed** locally on Node.js 22.22.3.
+Synthetic pipeline timings are recorded in `docs/PERFORMANCE.md`; manual
+accessibility, cross-browser, and real-browser automation remain unverified.
 
 ## 1. Testing principles
 
@@ -100,7 +101,7 @@ machine-specific paths, or globally installed tools. Time-sensitive or random
 behavior must be injected and controlled. A test that needs a browser or Docker
 must be clearly separated from the offline unit suite.
 
-## 5. Planned commands and checks
+## 5. Implemented commands and checks
 
 The repository defines the following offline checks:
 
@@ -110,14 +111,36 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run smoke
 ```
 
-At this checkpoint, `npm test` covers the analyzer, diagnostics, verification,
-validation, security boundaries, and critical workspace flows. The latest local
-run must be recorded from the actual command output; do not infer browser,
-accessibility, performance, or Docker results from the unit suite. GitHub
-Actions runs the Node.js 22 checks on Linux. Docker build verification belongs
-in Linux CI because Docker is unavailable on the local Windows machine.
+`npm ci` installs dependencies and may need network/cache access; subsequent
+checks above work without external services. `npm test` includes loopback-only
+static-server tests and does not need Docker or a real browser. Vitest concurrency
+is capped at two workers to reduce contention rather than relaxing assertions
+or the default test timeout.
+
+Coverage includes domain rules/identity/comparison/redaction, malformed storage,
+cache bounds and clear behavior, worker transport/abort/timeout/fallback, stale
+file reads, viewer/report sanitization, public claims, and real App workflows.
+The worker transport tests use controlled workers and the real task runtime;
+they do not execute the production module worker inside a browser.
+
+`npm run smoke` starts an ephemeral production server after `npm run build`,
+checks `/health`, SPA paths, the actual emitted worker JS and CSP, asset 404,
+and write-method 405, then stops its server. To check a running container use
+`node tests/production-smoke.mjs http://127.0.0.1:4173`. It verifies HTTP delivery,
+not browser execution or CSP enforcement. GitHub Actions repeats the checks on
+Ubuntu 24.04 and builds/starts the Docker image. Docker is unavailable locally.
+
+Local typecheck, lint, build, and production smoke passed. The online release
+check `npm audit --audit-level=high` found zero vulnerabilities on 2026-10-16.
+Run `npm run benchmark` for the separate bounded timing suite. Neither audit
+nor benchmark substitutes for the offline regression suite.
+
+Browser automation could not attach to the local preview in this environment.
+No real-browser E2E, cross-browser, screen-reader, keyboard, or WCAG pass is
+claimed from DOM/HTTP tests. These remain explicit release-review tasks.
 
 ## 6. Coverage and release gates
 

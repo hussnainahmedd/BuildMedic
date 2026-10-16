@@ -2,8 +2,9 @@
 
 **Status:** The frontend bundle and multi-stage Dockerfile are implemented.
 Docker verification is performed in Linux CI because Docker is unavailable on
-the Windows development machine. Run `38806248540` passed the image build,
-container startup, `/health` check, and homepage smoke check.
+the Windows development machine. The prior local-MVP checkpoint passed CI run
+[38818606997](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38818606997)
+at `fae0860`; that result does not verify later worker/hardening changes.
 
 ## 1. Deployment model
 
@@ -12,16 +13,18 @@ the user's browser, so a deployment needs only to serve the built assets over
 HTTPS. A backend, database, AI provider, and runtime secret are not required.
 
 Suitable targets may include a static hosting service, an object store behind
-a CDN, or a minimal Linux web server. The final target will be selected after
-the first production build exists.
+a CDN, or the included minimal Linux web server/container. Static hosts must
+support SPA route fallback, correct JavaScript MIME types, and same-origin module
+workers. Do not rewrite missing JS assets to HTML. No hosted target is configured.
 
 ## 2. Local production workflow
 
-Use the pinned Node.js 22 runtime and committed lockfile:
+Use the pinned Node.js 22.22.3 runtime and committed lockfile:
 
 ```text
 npm ci
 npm run build
+npm run smoke
 npm run start
 ```
 
@@ -39,12 +42,28 @@ The development server remains `npm run dev`; it is not production verification.
 
 The committed `Dockerfile` is multi-stage:
 
-1. Use a pinned Node.js 22 build image.
+1. Use `node:22.22.3-bookworm-slim` in both build and runtime stages.
 2. Copy only manifests first and install with `npm ci`.
 3. Copy source, run the production build, and discard build-time dependencies.
 4. Serve only the static output from a minimal runtime image.
 5. Run as a non-root user, expose port `4173`, and define a health check for
    `/health`.
+
+```sh
+docker build --pull --tag buildmedic:local .
+docker run --rm --name buildmedic-local --publish 4173:4173 buildmedic:local
+```
+
+From a second terminal with project dependencies installed:
+
+```sh
+node tests/production-smoke.mjs http://127.0.0.1:4173
+```
+
+Stop the foreground container with Ctrl+C. Redeploy/rollback by building and
+running a reviewed commit's image; preserve a prior known-good image tag before
+replacing a deployment. There is no database migration or stored server log data.
+HTTPS termination is the deployment host's responsibility.
 
 Docker is unavailable on the Windows development laptop, so no local Docker
 build or run result is claimed. GitHub Actions performs the image build and
@@ -56,10 +75,11 @@ The repository workflow at `.github/workflows/ci.yml` performs the complete
 Linux verification flow:
 
 - check out the repository;
-- select Node.js 22 using `.nvmrc`;
+- select Node.js 22.22.3 using `.nvmrc` on Ubuntu 24.04;
 - install exactly from `package-lock.json` with `npm ci`;
-- run test, lint, and production-build scripts; and
-- build the Docker image, start it, check `/health`, and smoke-test `/`.
+- run test, typecheck, lint, and production-build scripts; and
+- build the Docker image, start it, and run `tests/production-smoke.mjs` against
+  it (health, SPA, worker asset, CSP, missing assets, unsupported method).
 
 Missing manifests, scripts, Dockerfile, image startup, health responses, or
 homepage content fail the workflow. Record the actual CI run URL or status in

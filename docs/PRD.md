@@ -1,8 +1,10 @@
 # BuildMedic Product Requirements Document
 
-**Status:** The local MVP requirements are implemented for the browser-only
-analysis, verification, safety, and workspace flows. Hosted services,
-automatic remediation, and broader release review remain out of scope.
+**Status:** Local browser-only analysis, verification, safety, and workspace
+flows are implemented and covered by automated domain/component tests. This
+does not certify all release acceptance criteria: browser worker execution,
+manual accessibility/cross-browser review, and rendering/memory measurements
+remain open. Hosted services and automatic remediation remain out of scope.
 
 ## 1. Product summary
 

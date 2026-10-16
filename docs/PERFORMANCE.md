@@ -1,7 +1,43 @@
 # BuildMedic Performance
 
-**Status:** Proposed budgets and measurement plan. The frontend is implemented,
-but the documented performance benchmark has not been run yet.
+**Status:** Local synthetic analysis baseline measured; browser rendering,
+worker transport latency, and peak memory remain unmeasured.
+
+## Measured baseline (2026-10-16)
+
+Run `npm run benchmark` separately from `npm test`. The committed harness uses
+synthetic ASCII logs, checks correctness, warms each case once, and takes up to
+30 samples with a 15-second per-case cutoff (including warmup). It emits JSON
+with samples, median, p95, runtime, CPU, and actual sample count.
+`BENCH_ITERATIONS` can lower the requested count; fewer samples weaken conclusions.
+
+Environment: Node.js 22.22.3, Windows x64, Intel Core i7-8665U. These are pure
+pipeline timings, not browser UI or real worker round-trip measurements.
+
+| Input | Median | p95 | Timed samples |
+| --- | ---: | ---: | ---: |
+| 10 KiB | 3.63 ms | 6.31 ms | 30 |
+| 100 KiB | 23.01 ms | 34.32 ms | 30 |
+| 1 MiB | 214.92 ms | 295.94 ms | 30 |
+| 5 MiB | 1065.73 ms | 1398.38 ms | 13 (cutoff) |
+| 10 MiB | 2279.36 ms | 3481.90 ms | 5 (cutoff) |
+| 25 MiB | 6621.72 ms | 6621.72 ms | 2 (cutoff) |
+
+Small-sample p95 values, especially at 25 MiB, are not robust tail estimates.
+The original 1 MiB/250 ms and 10 MiB/2 s p95 goals were **not met**. Keep large
+processing in the worker and show progress/cancel; do not claim instant analysis.
+The harness also exercises dense no-match input and sanitized viewer preparation;
+their detailed timings are not recorded here. No peak-memory claim is made.
+
+An initial run exceeded the shell's 240-second limit and revealed quadratic
+string-rope flattening in control stripping (approximately 1.1 s at 1 MiB,
+19.8 s at 5 MiB). Span collection and a plain-text fast path removed that
+specific bottleneck; the complete post-fix run passed. Those early partial
+timings are diagnostic observations, not a full controlled baseline comparison.
+
+Production build at this checkpoint: main JS about 400.03 kB (118.32 kB gzip),
+worker 52.62 kB, deferred fallback runtime 15.99 kB, CSS 83.78 kB (15.13 kB gzip).
+These are emitted asset sizes, not measured loading time or a hard size budget.
 
 ## 1. Performance goals
 
@@ -22,16 +58,16 @@ input limit and final budgets must be confirmed by measurement before release.
 
 ## 2. Resource limits
 
-The proposed input policy is:
+The implemented default input policy is:
 
 - warn at 5 MiB;
-- accept up to 25 MiB when the browser has sufficient capacity;
+- accept up to 25 MiB, 100,000 lines, and 16,384 characters per line;
 - reject larger input before rule evaluation;
 - cap the number of retained lines of context per finding;
 - cap the total findings shown in the primary view while allowing a clear
   “additional findings omitted” state.
 
-The limits must be configurable in one domain policy and exposed in validation
+The limits are configurable in the shared domain policy and exposed in validation
 messages. They are safety limits, not a promise that every device can analyze
 the maximum size comfortably.
 
@@ -45,8 +81,8 @@ the maximum size comfortably.
 - Compile regular expressions once and keep them bounded and linear-time.
 - Keep context windows small and deduplicate evidence before rendering.
 - Avoid sorting large raw-log arrays; sort only the bounded finding set.
-- Use a Web Worker for large inputs if profiling shows the main thread becomes
-  visibly unresponsive.
+- Use the module Web Worker for analysis, comparison, inspection, and sanitized
+  viewer preparation/search. Worker-unavailable fallback is capped at 64 KiB.
 - Render long evidence lazily or with a bounded list rather than mounting every
   raw line at once.
 - Keep the analysis result serializable so work can be moved off the main
@@ -65,7 +101,7 @@ a finding non-deterministic.
 
 ## 5. Measurement protocol
 
-When implementation exists:
+For future comparable release measurements:
 
 1. Pin Node.js and browser versions used for the measurement.
 2. Use sanitized fixtures at 10 KiB, 100 KiB, 1 MiB, 5 MiB, 10 MiB, and the
@@ -78,7 +114,7 @@ When implementation exists:
 7. Keep benchmark data free of secrets and avoid treating a local development
    server as a production result.
 
-The first benchmark should establish a baseline before optimization. CI may run
+The local benchmark above establishes an initial baseline. CI may run
 a smaller regression suite; full performance measurements can run on a pinned
 Linux or release environment if they are too variable for every pull request.
 
