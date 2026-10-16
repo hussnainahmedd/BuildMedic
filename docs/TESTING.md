@@ -171,6 +171,9 @@ populated workspace, dialog and mobile input/sidebar surfaces. Zero violations
 in those scans is not a manual accessibility or complete WCAG certification.
 The two theme cases have separate bounded timeouts, retaining every assertion;
 the combined 24+-scan case originally exceeded its test-runner timeout.
+Scans await fonts and finite CSS transitions/entrance animations rather than
+measuring intermediate transparent or mixed-theme colors on faster CI runners;
+contrast and every other axe assertion remain enabled.
 
 `.cache/browser-results/` contains JSON results and synthetic screenshots; failed
 cases also retain a trace. CI uploads `browser-qa-evidence` for 14 days. Performance

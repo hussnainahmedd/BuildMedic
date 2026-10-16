@@ -5,7 +5,10 @@ Docker verification is performed in Linux CI because Docker is unavailable on
 the Windows development machine. Hardening code `4ae575e`, included in revision
 `3f8318f`, passed [CI run 38897847991](https://github.com/hussnainahmedd/BuildMedic/actions/runs/38897847991):
 Linux tests/typecheck/lint/build, pinned Docker build, container startup, and
-production HTTP/worker-asset smoke. This does not establish browser execution.
+production HTTP/worker-asset smoke. That historical run did not establish browser
+execution. The final QA workflow additionally checks Chromium/Firefox/WebKit
+against the non-root production container; current revision receipts and gaps
+are in [QA-RELEASE.md](QA-RELEASE.md). No public deployment has been performed.
 
 ## 1. Deployment model
 
@@ -70,6 +73,20 @@ Docker is unavailable on the Windows development laptop, so no local Docker
 build or run result is claimed. GitHub Actions performs the image build and
 container smoke test on an Ubuntu runner.
 
+An optional `browser-qa` target installs its browser OS packages inside Docker
+and runs the production browser suite. It is not included in the default final
+runtime image:
+
+```sh
+docker build --target browser-qa --tag buildmedic:qa .
+docker run --rm --shm-size=1g buildmedic:qa
+```
+
+The standalone QA image starts its own loopback production server. CI uses
+`BUILDMEDIC_BASE_URL` and host networking to test a separate production container
+instead. The browser wrapper stores binaries under `.cache/ms-playwright/`;
+do not install browser system dependencies globally or with host sudo.
+
 ## 4. Linux CI verification
 
 The repository workflow at `.github/workflows/ci.yml` performs the complete
@@ -78,9 +95,13 @@ Linux verification flow:
 - check out the repository;
 - select Node.js 22.22.3 using `.nvmrc` on Ubuntu 24.04;
 - install exactly from `package-lock.json` with `npm ci`;
-- run test, typecheck, lint, and production-build scripts; and
-- build the Docker image, start it, and run `tests/production-smoke.mjs` against
-  it (health, SPA, worker asset, CSP, missing assets, unsupported method).
+- run test, typecheck, lint, production-build, advisory audit and benchmark scripts;
+- build the production and browser-QA Docker images;
+- start the production image, assert its non-root user and run
+  `tests/production-smoke.mjs` (health, SPA, worker asset, CSP, missing assets,
+  unsupported method);
+- run the three-engine production browser suite against that container; and
+- retain synthetic screenshots/results/failure traces for 14 days.
 
 Missing manifests, scripts, Dockerfile, image startup, health responses, or
 homepage content fail the workflow. Record the actual CI run URL or status in

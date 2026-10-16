@@ -18,7 +18,7 @@ review remain material limitations.
 | Check | Status | Evidence / limits |
 | --- | --- | --- |
 | Clean baseline, runtime and lockfile | PASS | Started clean on main at `ae7792f`; Node 22.22.3, committed npm lockfile, no force operations |
-| `npm ci` | PASS | Baseline clean install; final lockfile reinstall is repeated before release push |
+| `npm ci` | PASS | Baseline and final lockfile clean installs; final offline-mode regression rerun also passed |
 | Typecheck / lint | PASS | `npm run typecheck`; `npm run lint` |
 | Offline unit / DOM / HTTP regression suite | PASS | `npm test`: 180 tests in 15 files, zero skips |
 | Production build and HTTP smoke | PASS | `npm run build`; `npm run smoke`: health, SPA, actual worker JS, CSP, asset 404, method 405 |
@@ -76,6 +76,12 @@ in this environment; a combined multi-surface axe case exceeded its runner
 timeout and was split by theme with all assertions retained. A 4,000-line
 automation fill exceeded its deadline; the equivalent >64 KiB fallback boundary
 uses 70 valid lines, while separate multi-megabyte browser workloads remain.
+The first Linux run (`38912231595`, source `779cba9`) passed builds, unit checks,
+audit, benchmarks, runtime startup/HTTP and all functional browser scenarios,
+but four axe cases sampled intermediate theme/opacity animation colors. The
+harness now waits for fonts and finite animations, retaining every assertion;
+that failed run is not presented as a release pass. CI Actions were also moved
+to commit-pinned v5 releases after a Node-20 deprecation warning.
 
 ## Measured performance
 

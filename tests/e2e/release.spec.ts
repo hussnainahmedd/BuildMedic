@@ -89,6 +89,19 @@ for (const scheme of ["dark", "light"] as const) {
 test(`automated WCAG audit of key ${scheme} surfaces`, async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   async function audit(label: string) {
+    // Audit the settled surface, not a blend of old/new theme colors or a
+    // partially transparent entrance animation. Fast Linux runners otherwise
+    // snapshot these finite transitions before they finish. Infinite decorative
+    // animations are deliberately not awaited; no axe rule is disabled.
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const finite = document.getAnimations().filter((animation) => {
+        const endTime = animation.effect?.getComputedTiming().endTime;
+        return typeof endTime === "number" && Number.isFinite(endTime);
+      });
+      await Promise.all(finite.map((animation) => animation.finished.catch(() => undefined)));
+    });
     const result = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
     await testInfo.attach(`axe-${label}`, { body: JSON.stringify(result.violations), contentType: "application/json" });
     expect.soft(result.violations.map((violation) => ({ id: violation.id, nodes: violation.nodes.map((node) => ({ target: node.target, summary: node.failureSummary })) })), label).toEqual([]);

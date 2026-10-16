@@ -28,6 +28,9 @@ currently in an unreleased local-MVP checkpoint.
 - Added an optional Docker browser-QA target and CI container/browser checks,
   dependency audit, benchmark and retained synthetic evidence. Production
   runtime remains non-root and free of test/browser dependencies.
+- Stabilized static accessibility scans after finite theme/dialog animations
+  (no rules disabled), and replaced deprecated Node-20 Actions with commit-pinned
+  v5 Actions after the first Linux/browser run exposed the timing issue.
 
 ### Added
 
