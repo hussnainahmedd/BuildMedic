@@ -18,6 +18,16 @@ export interface PublicPageProps {
   onNotify: (message: string) => void;
 }
 
+async function copyPublicText(text: string, onNotify: PublicPageProps["onNotify"], message: string) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("unavailable");
+    await navigator.clipboard.writeText(text);
+    onNotify(message);
+  } catch {
+    onNotify("Could not copy. Check clipboard permissions or select the text manually.");
+  }
+}
+
 function PublicPageHeader({
   eyebrow,
   title,
@@ -197,7 +207,7 @@ export function HomePage({ onNavigate, onOpenDemo }: PublicPageProps) {
             </p>
             <div className="hero-actions">
               <Button onClick={onOpenDemo} size="lg" icon="arrow-right" iconPosition="right">
-                Try the demo workspace
+                Try an example log
               </Button>
               <AppLink className="text-link" onNavigate={onNavigate} to="/how-it-works">
                 See how it works <Icon name="arrow-down" size={15} />
@@ -264,7 +274,7 @@ export function HomePage({ onNavigate, onOpenDemo }: PublicPageProps) {
             <span className="eyebrow">Built for the hard part</span>
             <h2>Less scrolling. More signal.</h2>
             <p>
-              The planned workspace keeps raw output, causal hints, and verification in the same mental model—without
+              The workspace keeps sanitized output, causal hints, and comparison in the same mental model—without
               pretending a heuristic is a certainty.
             </p>
             <div className="feature-checklist">
@@ -287,7 +297,7 @@ export function HomePage({ onNavigate, onOpenDemo }: PublicPageProps) {
             <div className="mini-panel-head">
               <span>analysis.summary</span>
               <Badge tone="success" size="sm" dot>
-                Ready to review
+                 Example finding
               </Badge>
             </div>
             <div className="mini-root-cause">
@@ -298,7 +308,7 @@ export function HomePage({ onNavigate, onOpenDemo }: PublicPageProps) {
                 <span className="mini-label">Likely root cause</span>
                 <strong>Type mismatch at the call site</strong>
               </div>
-              <Badge tone="info">87% confidence</Badge>
+               <Badge tone="info">High confidence</Badge>
             </div>
             <div className="mini-evidence">
               <span className="mini-label">Evidence · line 07</span>
@@ -321,7 +331,7 @@ export function HomePage({ onNavigate, onOpenDemo }: PublicPageProps) {
             <span className="eyebrow">A deliberate boundary</span>
             <h2>Local-first is a product decision.</h2>
             <p>
-              BuildMedic’s planned MVP does not need a hosted AI service or an account. It treats every pasted line as
+              BuildMedic does not need a hosted AI service or an account. It treats every pasted line as
               untrusted text and keeps the user in control of what gets shared.
             </p>
           </div>
@@ -335,9 +345,9 @@ export function HomePage({ onNavigate, onOpenDemo }: PublicPageProps) {
         <div className="container home-cta">
           <span className="eyebrow">Ready when the build is not</span>
           <h2>Make the next failure easier to read.</h2>
-          <p>Explore the frontend demo with clearly labeled sample data. The live engine is still being built.</p>
+          <p>Analyze a local Node.js log or start with a labeled example. No log upload or API key required.</p>
           <Button onClick={onOpenDemo} size="lg" icon="arrow-right" iconPosition="right">
-            Open demo workspace
+            Open local workspace
           </Button>
         </div>
       </section>
@@ -369,7 +379,7 @@ export function FeaturesPage({ onNavigate, onOpenDemo }: PublicPageProps) {
         }
       >
         <Button onClick={onOpenDemo} icon="arrow-right" iconPosition="right">
-          Explore the demo workspace
+          Analyze an example log
         </Button>
       </PublicPageHeader>
       <section className="public-section features-grid-section">
@@ -399,7 +409,7 @@ export function FeaturesPage({ onNavigate, onOpenDemo }: PublicPageProps) {
               <div className="detail-window-body">
                 <div className="detail-line detail-line-muted">finding.ruleId</div>
                 <div className="detail-code-line">
-                  <span>"typescript/assignment-type-mismatch"</span>
+                  <span>"typescript/compiler-diagnostic"</span>
                 </div>
                 <div className="detail-line detail-line-muted">finding.evidence</div>
                 <div className="detail-evidence-line">
@@ -415,7 +425,7 @@ export function FeaturesPage({ onNavigate, onOpenDemo }: PublicPageProps) {
                     Error
                   </Badge>
                   <Badge tone="info">High confidence</Badge>
-                  <span>demo-rules-1</span>
+                  <span>Illustrative finding</span>
                 </div>
               </div>
             </div>
@@ -424,7 +434,7 @@ export function FeaturesPage({ onNavigate, onOpenDemo }: PublicPageProps) {
             <span className="eyebrow">Structured, not magical</span>
             <h2>Every explanation has a trail back to the log.</h2>
             <p>
-              BuildMedic is planned around typed findings: a category, a confidence level, the relevant line, and a
+              BuildMedic returns typed findings: a category, a confidence level, the relevant line, and a
               suggested action. That structure makes the result easier to scan, share, and test.
             </p>
             <div className="detail-bullets">
@@ -441,7 +451,7 @@ export function FeaturesPage({ onNavigate, onOpenDemo }: PublicPageProps) {
                 <p>Make uncertainty visible instead of hiding it behind confident copy.</p>
               </div>
             </div>
-            <ArrowLink href="/documentation" label="Read the planned architecture" onNavigate={onNavigate} />
+            <ArrowLink href="/documentation" label="Read the architecture" onNavigate={onNavigate} />
           </div>
         </div>
       </section>
@@ -452,9 +462,9 @@ export function FeaturesPage({ onNavigate, onOpenDemo }: PublicPageProps) {
 export function HowItWorksPage({ onOpenDemo }: PublicPageProps) {
   const stages = [
     { number: "01", icon: "upload-cloud" as const, title: "Import", body: "Paste a build log or select a local text file. Input boundaries are explicit and validated before analysis.", detail: "Text stays in the active browser session." },
-    { number: "02", icon: "activity" as const, title: "Analyze", body: "The planned deterministic rules look for recognizable error families and rank useful signals.", detail: "Unknown output becomes a clear no-match state." },
+    { number: "02", icon: "activity" as const, title: "Analyze", body: "Deterministic local rules recognize supported failure families and rank evidence-backed signals.", detail: "Unknown output becomes a clear no-match state." },
     { number: "03", icon: "search" as const, title: "Investigate", body: "Open a finding to read the explanation, evidence lines, confidence, and a human-reviewable next step.", detail: "No command is executed on your behalf." },
-    { number: "04", icon: "refresh" as const, title: "Compare", body: "Bring a rerun back into the workspace to distinguish resolved, persistent, and new signals.", detail: "Verification matches stable finding identities." },
+    { number: "04", icon: "refresh" as const, title: "Compare", body: "Bring a rerun back to see resolved, persistent, new, or uncertain signals.", detail: "A log comparison is not proof that a build passed." },
   ];
 
   return (
@@ -471,7 +481,7 @@ export function HowItWorksPage({ onOpenDemo }: PublicPageProps) {
         }
       >
         <Button onClick={onOpenDemo} icon="arrow-right" iconPosition="right">
-          Walk through the demo
+          Walk through an example
         </Button>
       </PublicPageHeader>
       <section className="public-section how-flow-section">
@@ -508,13 +518,13 @@ export function HowItWorksPage({ onOpenDemo }: PublicPageProps) {
             </span>
             <span className="eyebrow">What it should do</span>
             <h2>Show the evidence and the uncertainty.</h2>
-            <p>Each planned finding carries an explanation, a confidence level, and a clear indication of what remains unknown.</p>
+            <p>Each finding carries source evidence, an explanation, and qualitative confidence. Unknown and ambiguous output stays visible.</p>
           </Card>
         </div>
       </section>
       <section className="public-section centered-cta-section">
         <div className="container centered-cta">
-          <DemoNotice>All interactive workspace content is labeled demonstration data.</DemoNotice>
+          <DemoNotice>Examples are labeled; your submitted log is analyzed by the real local engine.</DemoNotice>
           <h2>Ready to see the surface?</h2>
           <p>Open the frontend workspace and try the input, result, log viewer, and verification flows.</p>
           <Button onClick={onOpenDemo} size="lg" icon="arrow-right" iconPosition="right">
@@ -539,7 +549,7 @@ const documentationSections = [
     id: "architecture",
     icon: "layers" as const,
     title: "Architecture",
-    description: "Pure domain boundaries, browser data flow, and the future engine/UI seam.",
+    description: "Pure domain boundaries, background workers, and the connected browser workspace.",
     href: "/documentation#architecture",
     tag: "Design",
   },
@@ -563,7 +573,7 @@ const documentationSections = [
     id: "deployment",
     icon: "globe" as const,
     title: "Deployment",
-    description: "Static browser delivery, Linux CI, and future Docker verification boundaries.",
+    description: "Static browser delivery, Linux CI, and Docker build/startup verification.",
     href: "/documentation#deployment",
     tag: "Ops",
   },
@@ -578,7 +588,7 @@ const documentationSections = [
 ];
 
 export function DocumentationPage({ onNavigate, onNotify }: PublicPageProps) {
-  const [activeSection, setActiveSection] = useState("product");
+  const [activeSection, setActiveSection] = useState(() => documentationSections.some((section) => `#${section.id}` === window.location.hash) ? window.location.hash.slice(1) : "product");
   const activeDoc = documentationSections.find((section) => section.id === activeSection) ?? documentationSections[0];
 
   const docCopy: Record<string, { title: string; paragraphs: string[]; points: string[] }> = {
@@ -593,15 +603,15 @@ export function DocumentationPage({ onNavigate, onNotify }: PublicPageProps) {
     architecture: {
       title: "Architecture",
       paragraphs: [
-        "The planned implementation separates the analyzer, diagnostics, verification, shared types, and React presentation layers.",
-        "The browser is the product boundary for the MVP. Domain functions should receive explicit values and return serializable results without reading files, spawning processes, or making requests.",
+        "The implementation separates the analyzer, diagnostics, verification, shared types, and React presentation layers. Module Web Workers keep large-log processing off the UI thread.",
+        "Domain functions receive explicit values and return serializable results without reading project files, spawning processes, or making requests. No analysis API is required.",
       ],
       points: ["Pure domain contracts", "Typed findings and stable rule IDs", "No engine logic in views", "No backend required"],
     },
     security: {
       title: "Security model",
       paragraphs: [
-        "Log content is untrusted text. The planned UI will render it as text, apply input and resource limits, and never execute commands or fetch URLs from a log.",
+        "Log content is untrusted text. The UI renders it as text, enforces input/resource limits, and never executes commands or fetches URLs from a log.",
         "Local-first is a product boundary, not a universal security guarantee. The security document keeps the implementation honest about redaction, dependencies, and future hosted modes.",
       ],
       points: ["No required network request", "Bounded input and evidence", "No automatic remediation", "Secrets stay out of client builds"],
@@ -609,7 +619,7 @@ export function DocumentationPage({ onNavigate, onNotify }: PublicPageProps) {
     testing: {
       title: "Testing strategy",
       paragraphs: [
-        "The test plan starts with pure validation and fixture-driven domain checks, then adds UI journeys for paste, upload, results, verification, and accessibility.",
+        "Offline tests cover validation, domain rules, stable identities, conservative comparisons, redaction, storage privacy, and actual App workflows including cancellation and retry.",
         "The repository is intended to stay reproducible offline. Docker verification belongs to a Linux GitHub Actions runner because Docker is unavailable on the local Windows machine.",
       ],
       points: ["Unit and integration fixtures", "UI and keyboard journeys", "Security regression cases", "Performance budgets"],
@@ -617,8 +627,8 @@ export function DocumentationPage({ onNavigate, onNotify }: PublicPageProps) {
     deployment: {
       title: "Deployment",
       paragraphs: [
-        "The planned MVP is a static browser app. A deployment serves the built assets over HTTPS; it does not need a database, account, or runtime secret.",
-        "The future multi-stage Dockerfile will be verified in Linux CI. Current workspace interactions are frontend-only and intentionally use labeled demonstration data.",
+        "The MVP is a static browser app. Serve the built assets over HTTPS, or locally with the included Node static server; no database, account, or runtime secret is needed.",
+        "The multi-stage Dockerfile is built and smoke-tested by Linux CI. Initial installation and loading need local assets; analysis itself needs no network connection. There is no service-worker offline reload cache.",
       ],
       points: ["Node.js 22 toolchain", "Lockfile-based installs", "Static production assets", "CI-owned Docker build"],
     },
@@ -635,20 +645,19 @@ export function DocumentationPage({ onNavigate, onNotify }: PublicPageProps) {
   const copy = docCopy[activeSection];
 
   function copySectionLink() {
-    void navigator.clipboard?.writeText(`${window.location.origin}/documentation#${activeSection}`);
-    onNotify("Documentation section link copied locally.");
+    void copyPublicText(`${window.location.origin}/documentation#${activeSection}`, onNotify, "Documentation section link copied locally.");
   }
 
   return (
     <>
       <PublicPageHeader
-        description="Readable product decisions for a tool that is still being built in the open. The frontend can demonstrate the surface; the engine remains intentionally separate."
+        description="The implemented product boundaries: browser-local diagnostics, inspectable evidence, conservative log comparison, and reproducible deployment."
         eyebrow="Project docs"
         title={
           <>
             A clear contract
             <br />
-            before the first rule.
+            behind every rule.
           </>
         }
       />
@@ -745,12 +754,12 @@ export function AboutPage({ onNavigate, onOpenDemo }: PublicPageProps) {
               keep the uncertainty, and make it easy to bring a rerun back into the conversation.
             </p>
             <p>
-              The frontend you are seeing is a working product surface over clearly labeled fixtures. The diagnostic
-              engine is intentionally a later milestone, so visual confidence never gets confused with live analysis.
+              The workspace is connected to a deterministic TypeScript engine. Only the optional example input and
+              public-page illustrations are samples; submitted logs generate real, evidence-backed diagnostics locally.
             </p>
             <div className="about-actions">
               <Button onClick={onOpenDemo} icon="arrow-right" iconPosition="right">
-                Open the demo
+                Analyze an example
               </Button>
               <a className="text-link" href="https://github.com/hussnainahmedd/BuildMedic" rel="noreferrer" target="_blank">
                 View repository <Icon name="external-link" size={15} />
@@ -771,7 +780,7 @@ export function AboutPage({ onNavigate, onOpenDemo }: PublicPageProps) {
             <Card>
               <span className="principle-index">03</span>
               <h3>Honest over magical</h3>
-              <p>Demo data is labeled, heuristics will show confidence, and unknowns remain visible.</p>
+              <p>Examples are labeled, confidence is qualitative, and unknowns remain visible.</p>
             </Card>
           </div>
         </div>
@@ -808,8 +817,7 @@ export function SupportPage({ onNavigate, onNotify }: PublicPageProps) {
   ];
 
   function copySupportNote() {
-    void navigator.clipboard?.writeText("BuildMedic support note: I have a frontend question about the documented product surface.");
-    onNotify("Support note copied locally—remove private log content before sharing.");
+    void copyPublicText("BuildMedic support note: I have a question about local diagnostics. Expected behavior: ... Actual behavior: ... Sanitized reproduction: ...", onNotify, "Support note copied locally—remove private log content before sharing.");
   }
 
   return (
@@ -889,25 +897,25 @@ export function PrivacyPage({ onNavigate }: PublicPageProps) {
         <div className="container policy-layout">
           <aside className="policy-aside">
             <Badge tone="success" dot>
-              Local-first intent
+              Local by design
             </Badge>
-            <p>No analytics, remote AI, or account is required for the planned MVP.</p>
+            <p>No analytics, remote AI, or account is required for analysis.</p>
             <AppLink className="arrow-link" onNavigate={onNavigate} to="/security">
               Security boundaries <Icon name="arrow-right" size={14} />
             </AppLink>
           </aside>
           <article className="policy-article">
             <PolicyBlock title="What stays local">
-              <p>Planned analysis runs in the browser against the text you provide. There is no required backend API, database, or external AI request in the MVP.</p>
+              <p>Analysis runs in a browser Web Worker against the text you provide. There is no required backend API, database, or external AI request.</p>
             </PolicyBlock>
             <PolicyBlock title="What is not stored by default">
-              <p>Raw logs should remain in memory for the active session. Preferences such as theme or motion may be stored locally, but they must not include log content.</p>
+              <p>Raw logs remain in bounded session memory. Storage contains only whitelisted preferences and generic analysis metadata, not raw logs, evidence, filenames, or log-derived fingerprints. Clear history also clears cached session logs.</p>
             </PolicyBlock>
             <PolicyBlock title="Sharing is a user decision">
               <p>Copying a summary, exporting a report, or opening a GitHub link is an explicit user action. Future hosted modes would need a separate opt-in, retention policy, and threat model.</p>
             </PolicyBlock>
             <PolicyBlock title="What this page does not promise">
-              <p>Local-first does not remove the need to review the browser, hosting, dependencies, exported files, or any future server mode. See the repository security document for the planned controls.</p>
+              <p>Local-first does not remove the need to review browser extensions, hosting, dependencies, or exports. Redaction is best-effort, not perfect secret detection. Review reports before sharing.</p>
             </PolicyBlock>
           </article>
         </div>
@@ -927,14 +935,14 @@ function PolicyBlock({ title, children }: { title: string; children: ReactNode }
 
 export function SecurityPage({ onNavigate }: PublicPageProps) {
   const controls = [
-    { icon: "lock" as const, title: "No automatic execution", text: "The planned interface treats commands and URLs in logs as inert text." },
+    { icon: "lock" as const, title: "No automatic execution", text: "Commands and URLs in logs are inert text. Suggested fixes never run automatically." },
     { icon: "sliders" as const, title: "Bounded input", text: "Validation and resource limits are part of the product requirements, not an afterthought." },
     { icon: "shield-check" as const, title: "Explainable findings", text: "A result should expose evidence and confidence instead of hiding a heuristic." },
   ];
   return (
     <>
       <PublicPageHeader
-        description="Security is a boundary to design, test, and document. BuildMedic is not claiming a complete security review while the engine and deployment model are still in progress."
+        description="Local processing, validated input, bounded workers, safe text rendering, and redacted exports are implemented. These controls are not a promise of perfect security or a substitute for independent review."
         eyebrow="Security"
         title={
           <>
@@ -962,8 +970,8 @@ export function SecurityPage({ onNavigate }: PublicPageProps) {
           <div className="security-note-symbol"><Icon name="info" size={22} /></div>
           <div>
             <span className="eyebrow">Honest status</span>
-            <h2>Implementation and verification are still pending.</h2>
-            <p>Read the repository threat model for planned redaction, dependency, input, and future hosted-mode controls.</p>
+            <h2>Reviewable controls, explicit limitations.</h2>
+            <p>Read the repository threat model and regression tests. Redaction can miss project-specific secrets; log comparisons do not prove that a real build passed.</p>
           </div>
           <AppLink className="text-link" onNavigate={onNavigate} to="/documentation#security">
             Read the security model <Icon name="arrow-right" size={15} />

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 
 import { sanitizeEvidenceLine } from "../analyzer";
 import { Icon, type IconName } from "../components/icons";
@@ -19,11 +19,13 @@ import {
 } from "../components/ui";
 import { DEMO_NODE_BUILD_LOG } from "../data";
 import { formatBytes, formatCategory, formatDate, formatNumber, formatSource } from "../lib/format";
+import { LocalTaskClient, SMALL_INPUT_FALLBACK_BYTES, isLocalTaskAbort, localTaskMessage } from "../lib/analysis-client";
+import { buildAnalysisReport, NO_BUILD_DISCLAIMER, REPORT_FILE_NAME, REPORT_REDACTION_NOTICE, reportStatus, safeReportText } from "../lib/report";
+import { useLogInspection } from "../lib/use-log-inspection";
+import { VIEWER_PAGE_SIZE, type ViewerPage } from "../workers/protocol";
 import {
-  getUtf8ByteLength,
   validateFile,
   validateLogText,
-  validateVerificationLogs,
 } from "../lib/validation";
 import type {
   AnalysisHistoryEntry,
@@ -49,7 +51,7 @@ const FINDING_SEVERITY_ORDER: Record<FindingSeverity, number> = {
 };
 
 const FINDING_FILTERS: readonly FindingFilter[] = ["all", "critical", "error", "warning", "info"];
-const LOG_PAGE_SIZE = 200;
+const LOG_PAGE_SIZE = VIEWER_PAGE_SIZE;
 
 export interface WorkspacePageProps {
   onNavigate: Navigate;
@@ -57,14 +59,21 @@ export interface WorkspacePageProps {
   currentLog: string;
   currentFileName?: string;
   analysis: AnalysisResult;
+  activeRunId?: string;
   analysisError: string | null;
   history: readonly AnalysisHistoryEntry[];
   isAnalyzing: boolean;
   isVerifying: boolean;
   verification: VerificationResult | null;
+  verificationError?: string | null;
+  verificationInputs?: { readonly baseline: string; readonly rerun: string };
   onAnalyze: (text: string, source?: AnalysisSource, fileName?: string) => void;
   onClearActive: () => void;
+  onCancelAnalysis?: () => void;
+  onEditInput?: (text: string, source?: AnalysisSource, fileName?: string) => void;
   onCompareVerification: (baseline: string, rerun: string) => void;
+  onCancelVerification?: () => void;
+  onVerificationInputChange?: (baseline: string, rerun: string) => void;
   onOpenHistory: (analysisId: string) => void;
   preferences: UserPreferences;
   onPatchPreferences: (patch: Partial<UserPreferences>) => void;
@@ -118,7 +127,7 @@ function hasSubmittedInput(analysis: AnalysisResult): boolean {
 }
 
 function hasInvalidInput(analysis: AnalysisResult, currentLog: string): boolean {
-  return currentLog.trim().length > 0 && analysis.status === "invalid";
+  return currentLog.length > 0 && analysis.status === "invalid" && analysis.input.byteCount > 0;
 }
 
 function statusTone(status: AnalysisResult["status"]): "success" | "warning" | "error" | "neutral" {
@@ -169,10 +178,10 @@ async function copyPlainText(value: string): Promise<boolean> {
   }
 }
 
-export function OverviewPage({ onNavigate, onNotify, onOpenHistory, analysis, analysisError, currentLog, currentFileName, history, isAnalyzing, isVerifying, verification }: WorkspacePageProps) {
+export function OverviewPage({ onNavigate, onNotify, onOpenHistory, analysis, activeRunId, analysisError, currentLog, currentFileName, history, isAnalyzing, isVerifying, verification }: WorkspacePageProps) {
   const hasAnalysis = !isAnalyzing && hasSubmittedInput(analysis);
   const hasInvalid = !isAnalyzing && hasInvalidInput(analysis, currentLog);
-  const latest = history.find((entry) => entry.analysisId === analysis.id) ?? history[0];
+  const latest = history.find((entry) => entry.analysisId === (activeRunId ?? analysis.id)) ?? history[0];
   const topFinding = analysis.status === "complete" ? analysis.findings[0] : undefined;
   const findings = analysis.status === "complete" ? analysis.findings : [];
   const reviewCount = findings.filter((finding) => finding.severity === "critical" || finding.severity === "error").length;
@@ -322,7 +331,7 @@ function HistoryRow({ entry, onClick }: { entry: AnalysisHistoryEntry; onClick: 
   );
 }
 
-export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnalyze, onClearActive, preferences, analysisError, isAnalyzing }: WorkspacePageProps) {
+export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnalyze, onClearActive, onCancelAnalysis, onEditInput, preferences, analysisError, isAnalyzing }: WorkspacePageProps) {
   const [inputMode, setInputMode] = useState<AnalysisSource>(preferences.defaultInputMode);
   const [text, setText] = useState(() => currentLog);
   const [fileName, setFileName] = useState(() => currentFileName ?? "");
@@ -330,26 +339,50 @@ export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnaly
   const [dragActive, setDragActive] = useState(false);
   const [fileError, setFileError] = useState<string | undefined>();
   const [isExampleInput, setIsExampleInput] = useState(false);
-  const validation = validateLogText(text);
-  const byteCount = getUtf8ByteLength(text);
+  const [isReading, setIsReading] = useState(false);
+  const readerRef = useRef<FileReader | null>(null);
+  const readRevision = useRef(0);
+  const fileInspection = useRef<LocalTaskClient | null>(null);
+  const inspection = useLogInspection(text);
+  const validation = inspection.validation;
+  const byteCount = inspection.byteCount;
+
+  function abortRead() {
+    readRevision.current += 1;
+    const reader = readerRef.current;
+    readerRef.current = null;
+    if (reader?.readyState === 1) reader.abort();
+    fileInspection.current?.dispose();
+    fileInspection.current = null;
+    setIsReading(false);
+  }
+  useEffect(() => () => {
+    readRevision.current += 1;
+    if (readerRef.current?.readyState === 1) readerRef.current.abort();
+    fileInspection.current?.dispose();
+  }, []);
 
   function loadExample() {
+    if (isAnalyzing) return;
+    abortRead();
     setText(DEMO_NODE_BUILD_LOG.text);
     setFileName("");
     setInputMode("paste");
     setTouched(false);
     setFileError(undefined);
     setIsExampleInput(true);
+    onEditInput?.(DEMO_NODE_BUILD_LOG.text, "paste");
     onNotify("Example input loaded. Review it before starting analysis.");
   }
 
   function submit() {
     setTouched(true);
+    if (fileError) { onNotify(fileError); return; }
     if (!validation.valid) {
       onNotify(validation.error.message);
       return;
     }
-    if (isAnalyzing) return;
+    if (isAnalyzing || isReading || inspection.pending) return;
     onAnalyze(text, inputMode, inputMode === "file" && fileName ? fileName : undefined);
   }
 
@@ -360,6 +393,9 @@ export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnaly
   }
 
   function readFile(file: File) {
+    if (isAnalyzing) return;
+    abortRead();
+    const revision = readRevision.current;
     setFileError(undefined);
     const fileValidation = validateFile(file);
     setTouched(true);
@@ -369,23 +405,54 @@ export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnaly
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    readerRef.current = reader;
+    setIsReading(true);
+    reader.onload = async () => {
+      if (readRevision.current !== revision) return;
       if (typeof reader.result !== "string") {
+        setIsReading(false);
         reportFileError("We could not read this input as text.");
         return;
       }
-      setText(reader.result);
-      setFileName(file.name || "selected-build.log");
+      const content = reader.result;
+      const client = new LocalTaskClient();
+      fileInspection.current = client;
+      try {
+        const contentValidation = content.length <= SMALL_INPUT_FALLBACK_BYTES ? validateLogText(content)
+          : (await client.request("inspect", { text: content })).validation;
+        if (readRevision.current !== revision) return;
+        setIsReading(false);
+        if (!contentValidation.valid) { reportFileError(contentValidation.error.message); return; }
+      } catch (error) {
+        if (readRevision.current !== revision || isLocalTaskAbort(error)) return;
+        setIsReading(false);
+        reportFileError(localTaskMessage(error));
+        return;
+      } finally {
+        client.dispose();
+        if (fileInspection.current === client) fileInspection.current = null;
+      }
+      readerRef.current = null;
+      const selectedName = (file.name || "selected-build.log").slice(0, 255);
+      setText(content);
+      setFileName(selectedName);
       setInputMode("file");
       setTouched(false);
       setFileError(undefined);
       setIsExampleInput(false);
-      onNotify(`${file.name || "Local file"} is ready for analysis.`);
+      onEditInput?.(content, "file", selectedName);
+      onNotify("Local text file is ready for analysis.");
     };
-    reader.onerror = () => reportFileError("We could not read this input as text.");
+    reader.onerror = () => {
+      if (readRevision.current !== revision) return;
+      setIsReading(false);
+      reportFileError("We could not read this input as text.");
+    };
     try {
       reader.readAsText(file);
     } catch {
+      if (readRevision.current !== revision) return;
+      setIsReading(false);
       reportFileError("We could not read this input as text.");
     }
   }
@@ -404,6 +471,8 @@ export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnaly
   }
 
   function clearInput() {
+    if (isAnalyzing) { onCancelAnalysis?.(); return; }
+    abortRead();
     setText("");
     setFileName("");
     setTouched(false);
@@ -416,7 +485,7 @@ export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnaly
     <div className="workspace-page new-analysis-page">
       <DemoNotice>Example input is optional and loads only when you choose it. All analysis uses the local engine.</DemoNotice>
       <WorkspacePageHeader
-        actions={<Button onClick={loadExample} variant="secondary" icon="refresh">Load example input</Button>}
+        actions={<Button disabled={isAnalyzing} onClick={loadExample} variant="secondary" icon="refresh">Load example input</Button>}
         description="Start with a local build log. The analyzer reads text only; it never executes commands from the input."
         eyebrow="Workbench / new analysis"
         title="Bring the failure into focus."
@@ -434,26 +503,28 @@ export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnaly
             </div>
           </div>
           <div className="input-mode-tabs" role="tablist" aria-label="Input mode">
-            <button aria-selected={inputMode === "paste"} className={inputMode === "paste" ? "active" : ""} onClick={() => { setInputMode("paste"); setFileName(""); }} role="tab" type="button"><Icon name="terminal" size={15} /> Paste text</button>
-            <button aria-selected={inputMode === "file"} className={inputMode === "file" ? "active" : ""} onClick={() => setInputMode("file")} role="tab" type="button"><Icon name="upload-cloud" size={15} /> Upload file</button>
+            <button disabled={isAnalyzing} aria-selected={inputMode === "paste"} className={inputMode === "paste" ? "active" : ""} onClick={() => { abortRead(); setInputMode("paste"); setFileName(""); onEditInput?.(text, "paste"); }} role="tab" type="button"><Icon name="terminal" size={15} /> Paste text</button>
+            <button disabled={isAnalyzing} aria-selected={inputMode === "file"} className={inputMode === "file" ? "active" : ""} onClick={() => { abortRead(); setInputMode("file"); onEditInput?.(text, "file", fileName || undefined); }} role="tab" type="button"><Icon name="upload-cloud" size={15} /> Upload file</button>
           </div>
           <TextareaField
             aria-busy={isAnalyzing}
-            counter={`${formatBytes(byteCount)} · ${text ? text.split(/\r\n|\r|\n/).length : 0} lines`}
-            error={touched && !validation.valid ? validation.error.message : undefined}
+            counter={inspection.pending ? "Checking input locally…" : `${formatBytes(byteCount)} · ${inspection.lineCount} lines${inspection.complete ? "" : " (bounded count)"}`}
+            disabled={isAnalyzing}
+            error={(touched || !inspection.complete) && !isReading && !fileError && !inspection.pending && !validation.valid ? validation.error.message : undefined}
             hint="Text is treated as untrusted evidence and stays in this browser session."
             id="analysis-log"
             label="Build log"
             onBlur={() => setTouched(true)}
-            onChange={(event) => { setText(event.target.value); setIsExampleInput(false); setFileError(undefined); }}
+            onChange={(event) => { abortRead(); setText(event.target.value); setIsExampleInput(false); setFileError(undefined); onEditInput?.(event.target.value, inputMode, inputMode === "file" ? fileName || undefined : undefined); }}
             placeholder="$ npm run build\nPaste the relevant output here..."
             value={text}
           />
-          {fileError ? <div className="field-error" role="alert"><Icon name="circle-alert" size={14} /> {fileError}</div> : null}
+          {fileError ? <div className="field-error" id="file-read-error" role="alert"><Icon name="circle-alert" size={14} /> {fileError}</div> : null}
           {analysisError ? <div className="field-error" role="alert"><Icon name="circle-alert" size={14} /> {analysisError}</div> : null}
           {isAnalyzing ? <div aria-live="polite" className="demo-status-row"><span className="status-pulse" />Analyzing with the local rule catalog…</div> : null}
+          {isReading ? <div role="status" className="demo-status-row">Reading and validating local text file…</div> : null}
           <div className="input-card-actions">
-            <Button disabled={isAnalyzing} onClick={submit} size="lg" icon="sparkles" iconPosition="left">{isAnalyzing ? "Analyzing…" : "Analyze log"}</Button>
+            <Button disabled={isAnalyzing || isReading || inspection.pending} onClick={submit} size="lg" icon="sparkles" iconPosition="left">{isAnalyzing ? "Analyzing…" : "Analyze log"}</Button>
             <Button onClick={clearInput} variant="quiet" icon="x">{isAnalyzing ? "Cancel" : "Clear"}</Button>
           </div>
           <div className="input-limit-row">
@@ -473,10 +544,10 @@ export function NewAnalysisPage({ onNotify, currentLog, currentFileName, onAnaly
               onDragOver={(event) => event.preventDefault()}
               onDrop={handleDrop}
             >
-              <input accept=".txt,.log,.json,.ndjson,text/plain,application/json" id="log-file" onChange={handleFileInput} type="file" />
+              <input disabled={isAnalyzing} accept=".txt,.log,.json,.ndjson,text/plain,application/json" id="log-file" onChange={handleFileInput} type="file" aria-describedby={fileError ? "file-read-error" : undefined} aria-invalid={Boolean(fileError)} />
               <label htmlFor="log-file"><span>Choose a file</span> or drag it in</label>
             </div>
-            {fileName ? <div className="selected-file"><Icon name="file-code" size={15} /><span>{fileName}</span><Icon name="check" size={14} /></div> : null}
+            {fileName ? <div className="selected-file"><Icon name="file-code" size={15} /><span>{safeDisplayName(fileName, "Selected build log")}</span><Icon name="check" size={14} /></div> : null}
             {isExampleInput ? <div className="selected-file"><Icon name="file-text" size={15} /><span>Example input · {DEMO_NODE_BUILD_LOG.fileName}</span></div> : null}
           </Card>
           <Card className="input-safety-card">
@@ -501,7 +572,7 @@ function FindingCard({ finding, expanded, showEvidence, showEvidenceContext, onT
   const visibleEvidence = showEvidenceContext ? finding.evidence : finding.evidence.filter((evidence) => evidence.role !== "context");
   return (
     <Card className={`finding-card finding-card-${finding.severity}${expanded ? " expanded" : ""}`}>
-      <button className="finding-card-header" onClick={onToggle} type="button">
+      <button aria-expanded={expanded} className="finding-card-header" onClick={onToggle} type="button">
         <span className={`finding-severity-icon finding-severity-${finding.severity}`}><Icon name={finding.severity === "info" ? "info" : "circle-alert"} size={18} /></span>
         <span className="finding-heading-copy"><span className="panel-kicker">{formatCategory(finding.category)} · {finding.ruleId}</span><strong>{finding.title}</strong></span>
         <span className="finding-heading-badges"><Badge tone={severityTone(finding.severity)}>{finding.severity}</Badge><Badge tone="info">{finding.confidence} confidence</Badge><Icon name={expanded ? "chevron-down" : "chevron-right"} size={17} /></span>
@@ -618,7 +689,7 @@ export function AnalysisPage({ onNavigate, onNotify, analysis, currentLog, curre
           <div className="findings-heading-row">
             <div><span className="panel-kicker">Diagnostic findings</span><h2>Follow the signal</h2></div>
             <div className="finding-filters" role="group" aria-label="Filter findings">
-              {FINDING_FILTERS.map((option) => <button className={filter === option ? "active" : ""} key={option} onClick={() => setFilter(option)} type="button">{option === "all" ? "All" : option}<span>{option === "all" ? analysis.findings.length : counts[option]}</span></button>)}
+              {FINDING_FILTERS.map((option) => <button aria-pressed={filter === option} className={filter === option ? "active" : ""} key={option} onClick={() => setFilter(option)} type="button">{option === "all" ? "All" : option}<span>{option === "all" ? analysis.findings.length : counts[option]}</span></button>)}
             </div>
           </div>
           <div className="log-viewer-actions" role="group" aria-label="Findings tools">
@@ -656,35 +727,82 @@ export function LogViewerPage({ onNavigate, onNotify, currentLog, currentFileNam
   const [mode, setMode] = useState<"all" | "errors">("all");
   const [page, setPage] = useState(0);
   const hasLog = currentLog.length > 0;
-  const rawLines = hasLog ? currentLog.split(/\r\n|\r|\n/) : [];
-  const lines = rawLines.map((text, index) => ({
-    lineNumber: index + 1,
-    text: sanitizeEvidenceLine(text, 4096).text,
-  }));
-  const evidenceLines = new Set(
+  const [prepared, setPrepared] = useState<{ log: string; client: LocalTaskClient; busy: boolean; queued?: () => void } | null>(null);
+  const [display, setDisplay] = useState<{ log: string; result: ViewerPage } | null>(null);
+  const [viewerError, setViewerError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(hasLog);
+  const [isCopying, setIsCopying] = useState(false);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    setDisplay(null);
+    setPrepared(null);
+    setViewerError(null);
+    setIsLoading(Boolean(currentLog));
+    if (!currentLog) return;
+    let active = true;
+    const client = new LocalTaskClient();
+    setIsLoading(true);
+    setViewerError(null);
+    setDisplay(null);
+    setPrepared(null);
+    void client.request("viewer-prepare", { text: currentLog }).then(() => {
+      if (active) setPrepared({ log: currentLog, client, busy: false });
+    }).catch((error: unknown) => {
+      if (active && !isLocalTaskAbort(error)) { setViewerError(localTaskMessage(error)); setIsLoading(false); }
+    });
+    return () => { active = false; client.dispose(); };
+  }, [currentLog, retry]);
+  useEffect(() => {
+    if (!prepared || prepared.log !== currentLog) return;
+    let active = true;
+    const dispatch = () => {
+      if (!active) return;
+      // Coalesce rapid searches into one latest queued request. Never queue logs.
+      if (prepared.busy) { prepared.queued = dispatch; return; }
+      prepared.busy = true;
+      setIsLoading(true);
+      void prepared.client.request("viewer-page", { query: query.slice(0, 256), mode, page }).then((result) => {
+        if (active) { setDisplay({ log: currentLog, result }); setViewerError(null); }
+      }).catch((error: unknown) => {
+        if (active && !isLocalTaskAbort(error)) setViewerError(localTaskMessage(error));
+      }).finally(() => {
+        if (active) setIsLoading(false);
+        prepared.busy = false;
+        const next = prepared.queued;
+        prepared.queued = undefined;
+        next?.();
+      });
+    };
+    const timer = setTimeout(dispatch, query ? 100 : 0);
+    return () => { active = false; clearTimeout(timer); };
+  }, [currentLog, mode, page, prepared, query]);
+  const result = display?.log === currentLog ? display.result : undefined;
+  const evidenceLines = useMemo(() => new Set(
     analysis.status === "complete" ? analysis.findings.flatMap((finding) => finding.evidence.map((line) => line.lineNumber)) : [],
-  );
-  const filteredLines = lines.filter((line) => {
-    const matchesQuery = !query.trim() || line.text.toLowerCase().includes(query.trim().toLowerCase());
-    const matchesMode = mode === "all" || /error|failed|TS\d+|npm error/i.test(line.text);
-    return matchesQuery && matchesMode;
-  });
-  const pageCount = Math.max(1, Math.ceil(filteredLines.length / LOG_PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount - 1);
-  const visibleLines = filteredLines.slice(currentPage * LOG_PAGE_SIZE, (currentPage + 1) * LOG_PAGE_SIZE);
+  ), [analysis]);
+  const pageCount = result?.pageCount ?? 1;
+  const currentPage = result?.page ?? 0;
+  const visibleLines = result?.lines ?? [];
+  const filteredCount = result?.matchingCount ?? 0;
   const fileName = safeDisplayName(currentFileName || analysis.input.fileName, "Current build log");
 
   async function copyLog() {
-    if (!hasLog) {
+    if (!hasLog || !prepared || prepared.log !== currentLog) {
       onNotify("There is no active log to copy.");
       return;
     }
-    const copied = await copyPlainText(lines.map((line) => line.text).join("\n"));
-    onNotify(copied ? "Sanitized log copied locally." : "Could not copy the sanitized log. Check clipboard permissions and try again.");
+    setIsCopying(true);
+    try {
+      const copy = await prepared.client.request("viewer-copy", {});
+      const text = copy.truncated ? `${copy.text}\n[Sanitized copy truncated to bounded display/copy limits.]` : copy.text;
+      const copied = await copyPlainText(text);
+      onNotify(copied ? copy.truncated ? "Sanitized log copied locally (truncated to bounded display/copy limits)." : "Sanitized log copied locally." : "Could not copy the sanitized log. Check clipboard permissions and try again.");
+    } catch (error) { if (!isLocalTaskAbort(error)) onNotify(localTaskMessage(error)); }
+    finally { setIsCopying(false); }
   }
 
   function updateQuery(value: string) {
-    setQuery(value);
+    setQuery(value.slice(0, 256));
     setPage(0);
   }
 
@@ -696,24 +814,26 @@ export function LogViewerPage({ onNavigate, onNotify, currentLog, currentFileNam
   return (
     <div className="workspace-page log-viewer-page">
       <WorkspacePageHeader
-        actions={<><Button disabled={!hasLog} onClick={() => { void copyLog(); }} variant="secondary" icon="copy">Copy sanitized log</Button><Button onClick={() => onNavigate("/app/analysis")} icon="activity">Back to findings</Button></>}
+        actions={<><Button disabled={!hasLog || !prepared || prepared.log !== currentLog || isCopying} onClick={() => { void copyLog(); }} variant="secondary" icon="copy">{isCopying ? "Copying sanitized log…" : "Copy sanitized log"}</Button><Button onClick={() => onNavigate("/app/analysis")} icon="activity">Back to findings</Button></>}
         description="Keep the current log in view while you investigate. Displayed and copied lines are sanitized plain text."
         eyebrow="Workbench / log viewer"
         title="Stay close to the evidence."
       />
       <Card className="log-viewer-card">
         <div className="log-viewer-toolbar">
-          <div className="log-file-title"><span className="log-file-icon"><Icon name="file-code" size={16} /></span><span><strong>{fileName}</strong><small>{lines.length} lines · {formatBytes(getUtf8ByteLength(currentLog))}</small></span></div>
-          <div className="log-viewer-actions"><div className="log-search"><Icon name="search" size={15} /><input aria-label="Search log" onChange={(event) => updateQuery(event.target.value)} placeholder="Find in log..." value={query} />{query ? <IconButton icon="x" label="Clear search" onClick={() => updateQuery("")} size="sm" /> : null}</div><div className="segmented-control" role="group" aria-label="Log filter"><button className={mode === "all" ? "active" : ""} onClick={() => updateMode("all")} type="button">All</button><button className={mode === "errors" ? "active" : ""} onClick={() => updateMode("errors")} type="button">Errors only</button></div></div>
+          <div className="log-file-title"><span className="log-file-icon"><Icon name="file-code" size={16} /></span><span><strong>{fileName}</strong><small>{result?.lineCount ?? 0} lines · {formatBytes(result?.inputBytes ?? 0)}</small></span></div>
+          <div className="log-viewer-actions"><div className="log-search"><Icon name="search" size={15} /><input aria-label="Search log" maxLength={256} onChange={(event) => updateQuery(event.target.value)} placeholder="Find in log..." value={query} />{query ? <IconButton icon="x" label="Clear search" onClick={() => updateQuery("")} size="sm" /> : null}</div><div className="segmented-control" role="group" aria-label="Log filter"><button aria-pressed={mode === "all"} className={mode === "all" ? "active" : ""} onClick={() => updateMode("all")} type="button">All</button><button aria-pressed={mode === "errors"} className={mode === "errors" ? "active" : ""} onClick={() => updateMode("errors")} type="button">Errors only</button></div></div>
         </div>
-        <div className="log-viewer-meta"><span><span className="status-pulse" /> Sanitized read-only evidence</span><span>{filteredLines.length ? `${currentPage * LOG_PAGE_SIZE + 1}–${currentPage * LOG_PAGE_SIZE + visibleLines.length}` : 0} of {filteredLines.length} matching lines · {lines.length} total</span></div>
+        <div className="log-viewer-meta"><span><span className="status-pulse" /> Sanitized read-only evidence{result?.truncated ? " · long lines truncated" : ""}</span><span>{filteredCount ? `${currentPage * LOG_PAGE_SIZE + 1}–${currentPage * LOG_PAGE_SIZE + visibleLines.length}` : 0} of {filteredCount} matching lines · {result?.lineCount ?? 0} total</span></div>
+        {viewerError ? <div className="field-error" role="alert">{viewerError} <Button onClick={() => setRetry((value) => value + 1)} variant="quiet" size="sm">Retry log display</Button></div> : null}
+        {isLoading && hasLog ? <div role="status" className="demo-status-row">Preparing sanitized evidence locally…</div> : null}
         {pageCount > 1 ? <div className="segmented-control" role="group" aria-label="Log pages"><button disabled={currentPage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))} type="button">Previous</button><span aria-live="polite">Page {currentPage + 1} of {pageCount}</span><button disabled={currentPage >= pageCount - 1} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))} type="button">Next</button></div> : null}
-        <div className="log-code-window" role="region" aria-label="Build log lines" tabIndex={0}>
+        <div className="log-code-window" role="region" aria-label="Build log lines" aria-busy={isLoading && hasLog} tabIndex={0}>
           {visibleLines.length ? visibleLines.map((line) => {
             const isError = /error|failed|TS\d+|npm error/i.test(line.text);
             const isEvidence = evidenceLines.has(line.lineNumber);
             return <div className={`log-code-line${isError || isEvidence ? " is-error" : ""}${isEvidence ? " is-evidence" : ""}${preferences.showLineNumbers ? "" : " no-line-number"}`} key={`${line.lineNumber}-${line.text}`}>{preferences.showLineNumbers ? <span className="log-line-number">{String(line.lineNumber).padStart(2, "0")}</span> : null}<code>{highlightText(line.text, query)}</code></div>;
-          }) : <EmptyState description={hasLog ? "Try a different term or switch back to all lines." : "Analyze or open a log to inspect sanitized evidence here."} icon={hasLog ? "search" : "file-text"} title={hasLog ? "No matching lines" : "No active log"} />}
+          }) : !isLoading || !hasLog ? <EmptyState description={hasLog ? "Try a different term or switch back to all lines." : "Analyze or open a log to inspect sanitized evidence here."} icon={hasLog ? "search" : "file-text"} title={hasLog ? "No matching lines" : "No active log"} /> : null}
         </div>
       </Card>
       <div className="viewer-footer-note"><Icon name="info" size={14} /><span>Line numbers remain one-based. Finding evidence is highlighted when the active analysis provides source positions.</span><AppLink className="text-link" onNavigate={onNavigate} to="/app/analysis">See findings <Icon name="arrow-right" size={14} /></AppLink></div>
@@ -764,25 +884,41 @@ function VerificationNoMatchCard({ result }: { result: Extract<VerificationResul
   );
 }
 
-export function VerificationPage({ onNavigate, onNotify, onCompareVerification, currentLog, verification, isVerifying }: WorkspacePageProps) {
-  const [baseline, setBaseline] = useState(() => currentLog);
-  const [rerun, setRerun] = useState("");
+export function VerificationPage({ onNavigate, onNotify, onCompareVerification, onCancelVerification, onVerificationInputChange, currentLog, verification, verificationError, verificationInputs, isVerifying }: WorkspacePageProps) {
+  const [baseline, setBaseline] = useState(() => verificationInputs?.baseline ?? currentLog);
+  const [rerun, setRerun] = useState(() => verificationInputs?.rerun ?? "");
   const [touched, setTouched] = useState(false);
-  const validation = validateVerificationLogs(baseline, rerun);
+  const [inputsChanged, setInputsChanged] = useState(false);
+  const baselineInspection = useLogInspection(baseline);
+  const rerunInspection = useLogInspection(rerun);
+  const pending = baselineInspection.pending || rerunInspection.pending;
+  const baselineValidation = baselineInspection.validation;
+  const rerunValidation = rerunInspection.validation;
+  const baselineError = !baselineValidation.valid ? baselineValidation.error.code === "required" ? "Add the original build log before verifying a fix." : baselineValidation.error.message : undefined;
+  const rerunError = !rerunValidation.valid ? rerunValidation.error.code === "required" ? "Add the rerun build log before verifying a fix." : rerunValidation.error.message : undefined;
+  const visibleVerification = inputsChanged ? null : verification;
+  function changeInputs(nextBaseline: string, nextRerun: string) {
+    setBaseline(nextBaseline);
+    setRerun(nextRerun);
+    setInputsChanged(true);
+    onVerificationInputChange?.(nextBaseline, nextRerun);
+  }
 
   function compare() {
     setTouched(true);
-    if (!validation.valid) {
-      onNotify(validation.errors[0]?.message ?? "Add both logs before comparing.");
+    if (isVerifying || pending) return;
+    if (!baselineValidation.valid || !rerunValidation.valid) {
+      onNotify(baselineError ?? rerunError ?? "Add both logs before comparing.");
       return;
     }
+    setInputsChanged(false);
     onCompareVerification(baseline, rerun);
   }
 
   return (
     <div className="workspace-page verification-page">
       <WorkspacePageHeader
-        actions={<Button disabled={isVerifying} onClick={compare} icon="refresh">{isVerifying ? "Comparing…" : "Compare findings"}</Button>}
+        actions={<Button disabled={isVerifying || pending} onClick={compare} icon="refresh">{isVerifying ? "Comparing…" : "Compare findings"}</Button>}
         description="Put the original failure next to a rerun. The comparison labels analyzer finding transitions and does not run the build."
         eyebrow="Workbench / verification"
         title="Did the fix change the diagnostics?"
@@ -790,18 +926,19 @@ export function VerificationPage({ onNavigate, onNotify, onCompareVerification, 
       <div className="verification-input-grid">
         <Card className="verification-input-card">
           <div className="verification-input-head"><span className="verification-step">01</span><div><span className="panel-kicker">Baseline</span><h2>Before the fix</h2></div><Badge tone="neutral">Current log</Badge></div>
-          <TextareaField error={touched && !validation.baseline.valid ? validation.baseline.error.message : undefined} id="baseline-log" label="Original build log" onBlur={() => setTouched(true)} onChange={(event) => setBaseline(event.target.value)} value={baseline} />
-          <span className="verification-input-meta"><Icon name="file-code" size={13} /> {baseline ? baseline.split(/\r\n|\r|\n/).length : 0} lines · {formatBytes(getUtf8ByteLength(baseline))}</span>
+          <TextareaField disabled={isVerifying} aria-busy={isVerifying || baselineInspection.pending} error={touched && !baselineInspection.pending ? baselineError : undefined} id="baseline-log" label="Original build log" onBlur={() => setTouched(true)} onChange={(event) => changeInputs(event.target.value, rerun)} value={baseline} />
+          <span className="verification-input-meta"><Icon name="file-code" size={13} /> {baselineInspection.pending ? "Checking input locally…" : `${baselineInspection.lineCount} lines · ${formatBytes(baselineInspection.byteCount)}`}</span>
         </Card>
         <div className="verification-connector" aria-hidden="true"><span>compare</span><Icon name="arrow-right" size={18} /></div>
         <Card className="verification-input-card">
           <div className="verification-input-head"><span className="verification-step verification-step-accent">02</span><div><span className="panel-kicker">Rerun</span><h2>After the fix</h2></div><Badge tone="accent">New input</Badge></div>
-          <TextareaField error={touched && !validation.rerun.valid ? validation.rerun.error.message : undefined} id="rerun-log" label="Rerun build log" onBlur={() => setTouched(true)} onChange={(event) => setRerun(event.target.value)} value={rerun} />
-          <span className="verification-input-meta"><Icon name="file-code" size={13} /> {rerun ? rerun.split(/\r\n|\r|\n/).length : 0} lines · {formatBytes(getUtf8ByteLength(rerun))}</span>
+          <TextareaField disabled={isVerifying} aria-busy={isVerifying || rerunInspection.pending} error={touched && !rerunInspection.pending ? rerunError : undefined} id="rerun-log" label="Rerun build log" onBlur={() => setTouched(true)} onChange={(event) => changeInputs(baseline, event.target.value)} value={rerun} />
+          <span className="verification-input-meta"><Icon name="file-code" size={13} /> {rerunInspection.pending ? "Checking input locally…" : `${rerunInspection.lineCount} lines · ${formatBytes(rerunInspection.byteCount)}`}</span>
         </Card>
       </div>
-      <div className="verification-actions"><Button disabled={isVerifying} onClick={compare} size="lg" icon="shield-check">{isVerifying ? "Comparing…" : "Compare findings"}</Button></div>
-      {isVerifying ? <Card className="verification-empty-card"><StatusRow>Analyzing baseline and rerun locally…</StatusRow></Card> : verification?.status === "invalid" ? <Card className="verification-empty-card"><EmptyState description={verification.error.message} icon="circle-alert" title="Comparison could not be completed" /></Card> : verification?.status === "no-match" ? <VerificationNoMatchCard result={verification} /> : verification?.status === "compared" ? <VerificationResultCard onNavigate={onNavigate} result={verification} /> : <Card className="verification-empty-card"><EmptyState description="Enter a rerun log, then compare the analyzer findings. No build result is inferred from an empty comparison." icon="shield-check" title="Waiting for a rerun" action={<span className="empty-state-meta"><Kbd>⌘</Kbd> <Kbd>↵</Kbd> compare when ready</span>} /></Card>}
+      <div className="verification-actions"><Button disabled={isVerifying || pending} onClick={compare} size="lg" icon="shield-check">{isVerifying ? "Comparing…" : "Compare findings"}</Button>{isVerifying && onCancelVerification ? <Button onClick={onCancelVerification} variant="quiet" icon="x">Cancel comparison</Button> : null}</div>
+      {!inputsChanged && verificationError ? <div className="field-error" role="alert">{verificationError}</div> : null}
+      {isVerifying ? <Card className="verification-empty-card"><StatusRow>Analyzing baseline and rerun locally…</StatusRow></Card> : visibleVerification?.status === "invalid" ? <Card className="verification-empty-card"><EmptyState description={visibleVerification.error.message} icon="circle-alert" title="Comparison could not be completed" /></Card> : visibleVerification?.status === "no-match" ? <VerificationNoMatchCard result={visibleVerification} /> : visibleVerification?.status === "compared" ? <VerificationResultCard onNavigate={onNavigate} result={visibleVerification} /> : <Card className="verification-empty-card"><EmptyState description="Enter a rerun log, then compare the analyzer findings. No build result is inferred from an empty comparison." icon="shield-check" title="Waiting for a rerun" action={<span className="empty-state-meta"><Kbd>⌘</Kbd> <Kbd>↵</Kbd> compare when ready</span>} /></Card>}
     </div>
   );
 }
@@ -825,64 +962,12 @@ export function HistoryPage({ onNavigate, history, onOpenHistory, onClearHistory
   );
 }
 
-function reportStatus(analysis: AnalysisResult, currentLog: string): string {
-  if (!hasSubmittedInput(analysis) && !hasInvalidInput(analysis, currentLog)) return "No analysis available";
-  if (analysis.status === "complete") return "Complete";
-  if (analysis.status === "no-match") return "No supported match";
-  return "Invalid input";
-}
-
-function reportText(analysis: AnalysisResult, currentLog: string, currentFileName?: string): string {
-  const lines = [
-    "BUILDMEDIC ANALYSIS REPORT",
-    "==========================",
-    "",
-    `Status: ${reportStatus(analysis, currentLog)}`,
-    `Input: ${safeDisplayName(currentFileName || analysis.input.fileName, analysis.input.source === "file" ? "Uploaded build log" : "Pasted build log")}`,
-    `Analyzed at: ${analysis.analyzedAt}`,
-    `Input size: ${formatBytes(analysis.input.byteCount)} across ${analysis.input.lineCount} lines`,
-    `Rule catalog: ${analysis.ruleCatalogVersion}`,
-    "",
-  ];
-
-  if (!hasSubmittedInput(analysis) && !hasInvalidInput(analysis, currentLog)) {
-    lines.push("No analysis has been run in this session.", "Paste or upload a build log from New analysis to generate a report.");
-    return lines.join("\n");
-  }
-
-  if (analysis.status === "invalid") {
-    lines.push("ERROR", "-----", analysis.error.message);
-    return lines.join("\n");
-  }
-
-  if (analysis.status === "no-match") {
-    lines.push("RESULT", "------", analysis.message, "No build outcome is inferred from this result.");
-    return lines.join("\n");
-  }
-
-  lines.push(`Findings: ${analysis.findings.length}`, "", "FINDINGS", "--------");
-  analysis.findings.forEach((finding, index) => {
-    lines.push(
-      `${index + 1}. [${finding.severity.toUpperCase()}] ${finding.title}`,
-      `   Rule: ${finding.ruleId}`,
-      `   Confidence: ${finding.confidence}`,
-      `   Explanation: ${finding.explanation}`,
-      "   Evidence:",
-      ...finding.evidence.map((evidence) => `   ${evidence.lineNumber}: ${safeEvidenceText(evidence.text)}`),
-      "   Suggested next step:",
-      ...finding.suggestedActions.map((action) => `   - ${action.label}: ${action.description}`),
-      `   Verification guidance: ${finding.verificationHint}`,
-      "",
-    );
-  });
-  return lines.join("\n");
-}
-
 export function ReportsPage({ onNotify, analysis, currentLog, currentFileName }: WorkspacePageProps) {
   const [tab, setTab] = useState<"overview" | "evidence" | "next">("overview");
-  const report = reportText(analysis, currentLog, currentFileName);
+  const hasInput = hasSubmittedInput(analysis) || hasInvalidInput(analysis, currentLog);
+  const report = useMemo(() => buildAnalysisReport(analysis, hasInput), [analysis, hasInput]);
   const activeFinding = analysis.status === "complete" ? analysis.findings[0] : undefined;
-  const status = reportStatus(analysis, currentLog);
+  const status = reportStatus(analysis, hasInput);
 
   async function copyReport() {
     const copied = await copyPlainText(report);
@@ -891,21 +976,25 @@ export function ReportsPage({ onNotify, analysis, currentLog, currentFileName }:
 
   function downloadReport() {
     let url: string | undefined;
+    let link: HTMLAnchorElement | undefined;
     try {
       const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
       url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
+      link = document.createElement("a");
       link.href = url;
-      link.download = "buildmedic-report.txt";
+      link.download = REPORT_FILE_NAME;
       link.rel = "noopener";
       document.body.appendChild(link);
       link.click();
       link.remove();
-      onNotify("Report downloaded as buildmedic-report.txt.");
+      onNotify(`Report download prepared as ${REPORT_FILE_NAME}.`);
     } catch {
       onNotify("Could not download the report in this browser.");
     } finally {
-      if (url) URL.revokeObjectURL(url);
+      link?.remove();
+      // Allow the browser to consume the Blob before revocation, including slow
+      // download dispatch. This timer captures no input or component state.
+      if (url) { const objectUrl = url; setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000); }
     }
   }
 
@@ -919,23 +1008,25 @@ export function ReportsPage({ onNotify, analysis, currentLog, currentFileName }:
           <div className="report-preview-top"><div className="report-brand-lockup"><span className="brand-mark"><span /><span /><span /></span><span><strong>BuildMedic</strong><small>Local analysis report</small></span></div><Badge tone={analysis.status === "complete" ? "accent" : analysis.status === "no-match" ? "success" : "neutral"} dot>{status}</Badge></div>
           <div className="report-preview-content">
             <span className="panel-kicker">{activeFinding ? "Highest-ranked finding" : "Analysis summary"}</span>
-            <h2>{activeFinding?.title ?? status}</h2>
-            <p>{activeFinding?.explanation ?? (analysis.status === "no-match" ? analysis.message : analysis.status === "invalid" ? analysis.error.message : "Run an analysis to populate this report.")}</p>
-            <div className="report-preview-meta">{activeFinding ? <><Badge tone={severityTone(activeFinding.severity)}>{activeFinding.severity}</Badge><Badge tone="info">{activeFinding.confidence} confidence</Badge></> : null}<span>{currentFileName || analysis.input.fileName || "Current input"}</span></div>
+            <h2>{activeFinding ? safeReportText(activeFinding.title) : status}</h2>
+            <p>{activeFinding ? safeReportText(activeFinding.explanation) : !hasInput ? "Run an analysis to populate this report." : analysis.status === "no-match" ? safeReportText(analysis.message) : analysis.status === "invalid" ? safeReportText(analysis.error.message) : "Run an analysis to populate this report."}</p>
+            <div className="report-preview-meta">{activeFinding ? <><Badge tone={severityTone(activeFinding.severity)}>{activeFinding.severity}</Badge><Badge tone="info">{activeFinding.confidence} confidence</Badge></> : null}<span>{safeDisplayName(currentFileName || analysis.input.fileName, "Current input")}</span></div>
             <Divider />
             <div className="report-preview-section"><span className="panel-kicker">Evidence</span>{activeFinding?.evidence.length ? activeFinding.evidence.slice(0, 4).map((line, index) => <code key={`${line.lineNumber}-${index}`}>{String(line.lineNumber).padStart(2, "0")}  {safeEvidenceText(line.text)}</code>) : <p>{analysis.status === "complete" ? "No evidence lines were returned." : "Evidence will appear after a supported diagnostic is found."}</p>}</div>
-            {nextStep ? <div className="report-preview-action"><span className="report-preview-action-icon"><Icon name="lightbulb" size={16} /></span><span><strong>{nextStep.label}</strong><small>{nextStep.description}</small></span></div> : null}
+            {nextStep ? <div className="report-preview-action"><span className="report-preview-action-icon"><Icon name="lightbulb" size={16} /></span><span><strong>{safeReportText(nextStep.label)}</strong><small>{safeReportText(nextStep.description)}</small></span></div> : null}
+            <PartialAnalysisNotice analysis={analysis} />
           </div>
           <div className="report-preview-footer"><span><Icon name="lock" size={13} /> Sanitized plain text</span><span>Rule catalog {analysis.ruleCatalogVersion}</span></div>
         </Card>
         <Card className="report-outline-card">
           <div className="panel-heading"><div><span className="panel-kicker">Report outline</span><h2>What gets shared</h2></div><Icon name="sliders" size={17} /></div>
-          <div className="report-tabs" role="tablist" aria-label="Report sections"><button className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")} type="button">Overview</button><button className={tab === "evidence" ? "active" : ""} onClick={() => setTab("evidence")} type="button">Evidence</button><button className={tab === "next" ? "active" : ""} onClick={() => setTab("next")} type="button">Next step</button></div>
-          <div className="report-tab-content">{tab === "overview" ? <><span className="outline-number">01</span><h3>Diagnosis first</h3><p>{activeFinding ? `${activeFinding.title} is ranked first by the analyzer with ${activeFinding.confidence} confidence.` : "The current analyzer status and input metadata stay together at the top."}</p></> : tab === "evidence" ? <><span className="outline-number">02</span><h3>Evidence stays inspectable</h3><p>{activeFinding ? `${activeFinding.evidence.length} sanitized source ${activeFinding.evidence.length === 1 ? "line is" : "lines are"} included with one-based positions.` : "No diagnostic evidence is available for this result."}</p></> : <><span className="outline-number">03</span><h3>Actions stay reviewable</h3><p>{nextStep ? `${nextStep.label}: ${nextStep.description}` : "No suggested action is available until a supported finding is returned."}</p></>}</div>
+          <div className="report-tabs" role="tablist" aria-label="Report sections"><button role="tab" aria-selected={tab === "overview"} className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")} type="button">Overview</button><button role="tab" aria-selected={tab === "evidence"} className={tab === "evidence" ? "active" : ""} onClick={() => setTab("evidence")} type="button">Evidence</button><button role="tab" aria-selected={tab === "next"} className={tab === "next" ? "active" : ""} onClick={() => setTab("next")} type="button">Next step</button></div>
+          <div className="report-tab-content" role="tabpanel">{tab === "overview" ? <><span className="outline-number">01</span><h3>Diagnosis first</h3><p>{activeFinding ? `${safeReportText(activeFinding.title)} is ranked first by the analyzer with ${activeFinding.confidence} confidence. All ${analysis.findings.length} bounded findings are included in the full report.` : "The current analyzer status and input metadata stay together at the top."}</p></> : tab === "evidence" ? <><span className="outline-number">02</span><h3>Evidence stays inspectable</h3><p>{activeFinding ? "Sanitized source evidence from every bounded finding is included with one-based positions." : "No diagnostic evidence is available for this result."}</p></> : <><span className="outline-number">03</span><h3>Actions stay reviewable</h3><p>{nextStep ? `${safeReportText(nextStep.label)}: ${safeReportText(nextStep.description)}` : "No suggested action is available until a supported finding is returned."}</p></>}</div>
           <Divider />
-          <div className="report-outline-note"><Icon name="info" size={15} /><span>Reports contain analyzer metadata and sanitized evidence. They do not execute or suggest an automatic command.</span></div>
+          <div className="report-outline-note"><Icon name="info" size={15} /><span>{NO_BUILD_DISCLAIMER} {REPORT_REDACTION_NOTICE}</span></div>
         </Card>
       </div>
+      <Card className="report-full-text"><details><summary>Full sanitized report{analysis.status === "complete" ? ` · ${analysis.findings.length} bounded findings` : ""}</summary><pre aria-label="Full sanitized report">{report}</pre></details></Card>
     </div>
   );
 }
@@ -950,7 +1041,7 @@ export function SettingsPage({ preferences, onPatchPreferences, theme, onSetThem
         <Card className="settings-card">
           <div className="settings-card-heading"><div><span className="panel-kicker">Appearance</span><h2>Visual system</h2></div><Icon name="sun" size={18} /></div>
           <div className="theme-choice-grid">
-            {(["dark", "light", "system"] as const).map((option) => <button className={`theme-choice${theme === option ? " active" : ""}`} key={option} onClick={() => onSetTheme(option)} type="button"><span className={`theme-choice-swatch theme-choice-${option}`} /> <span><strong>{option[0].toUpperCase() + option.slice(1)}</strong><small>{option === "system" ? "Follow browser preference" : `${option[0].toUpperCase() + option.slice(1)} workspace`}</small></span>{theme === option ? <Icon name="check-circle" size={16} /> : null}</button>)}
+              {(["dark", "light", "system"] as const).map((option) => <button aria-pressed={theme === option} className={`theme-choice${theme === option ? " active" : ""}`} key={option} onClick={() => onSetTheme(option)} type="button"><span className={`theme-choice-swatch theme-choice-${option}`} /> <span><strong>{option[0].toUpperCase() + option.slice(1)}</strong><small>{option === "system" ? "Follow browser preference" : `${option[0].toUpperCase() + option.slice(1)} workspace`}</small></span>{theme === option ? <Icon name="check-circle" size={16} /> : null}</button>)}
           </div>
           <Divider />
           <Toggle checked={preferences.reducedMotion} description="Use minimal transitions and no parallax response." label="Reduce motion" onChange={(checked) => onPatchPreferences({ reducedMotion: checked })} />
@@ -960,7 +1051,7 @@ export function SettingsPage({ preferences, onPatchPreferences, theme, onSetThem
         <Card className="settings-card">
           <div className="settings-card-heading"><div><span className="panel-kicker">Input defaults</span><h2>Start with the right surface</h2></div><Icon name="sliders" size={18} /></div>
           <div className="settings-option-group"><span className="settings-option-label">Default input mode</span><div className="settings-segmented"><button className={preferences.defaultInputMode === "paste" ? "active" : ""} onClick={() => onPatchPreferences({ defaultInputMode: "paste" })} type="button"><Icon name="terminal" size={15} /> Paste</button><button className={preferences.defaultInputMode === "file" ? "active" : ""} onClick={() => onPatchPreferences({ defaultInputMode: "file" })} type="button"><Icon name="file-code" size={15} /> File</button></div></div>
-          <div className="settings-option-group"><span className="settings-option-label">Display density</span><div className="settings-segmented"><button className={preferences.displayDensity === "comfortable" ? "active" : ""} onClick={() => onPatchPreferences({ displayDensity: "comfortable" })} type="button">Comfortable</button><button className={preferences.displayDensity === "compact" ? "active" : ""} onClick={() => onPatchPreferences({ displayDensity: "compact" })} type="button">Compact</button></div></div>
+          <div className="settings-option-group"><span className="settings-option-label">Display density</span><div className="settings-segmented"><button aria-pressed={preferences.displayDensity === "comfortable"} className={preferences.displayDensity === "comfortable" ? "active" : ""} onClick={() => onPatchPreferences({ displayDensity: "comfortable" })} type="button">Comfortable</button><button aria-pressed={preferences.displayDensity === "compact"} className={preferences.displayDensity === "compact" ? "active" : ""} onClick={() => onPatchPreferences({ displayDensity: "compact" })} type="button">Compact</button></div></div>
           <div className="settings-safe-note"><Icon name="shield-check" size={15} /><span><strong>Local analyzer {engineLabel.toLowerCase()}</strong><small>Rule catalog {analysis.ruleCatalogVersion}. No command execution or network request is required.</small></span><Badge tone={engineTone} dot>{engineLabel}</Badge></div>
           <Button onClick={() => { onPatchPreferences({ theme: "system", defaultInputMode: "paste", displayDensity: "comfortable", reducedMotion: false, showLineNumbers: true, showEvidenceContext: true }); onNotify("Preferences reset to defaults."); }} variant="quiet" icon="refresh">Reset preferences</Button>
         </Card>

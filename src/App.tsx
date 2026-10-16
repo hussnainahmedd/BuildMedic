@@ -4,6 +4,9 @@ import { analyzeLog } from "./analyzer";
 import { PublicLayout, WorkspaceShell, type Navigate } from "./components/layout";
 import { Toast } from "./components/ui";
 import { DEMO_NODE_BUILD_LOG } from "./data";
+import { LocalTaskClient, isLocalTaskAbort, localTaskMessage } from "./lib/analysis-client";
+import { browserStorage, clearStoredHistory, makeHistoryEntry, MAX_HISTORY_ENTRIES, readHistory, readPreferences, whitelistPreferences, writeHistory, writePreferences } from "./lib/history";
+import { SessionAnalysisCache } from "./lib/session-cache";
 import {
   AboutPage,
   DocumentationPage,
@@ -31,23 +34,10 @@ import {
 import type {
   AnalysisHistoryEntry,
   AnalysisResult,
-  AnalysisSource,
   ThemeMode,
   UserPreferences,
   VerificationResult,
 } from "./types";
-import { DEFAULT_USER_PREFERENCES } from "./types/preferences";
-import { compareAnalysisResults } from "./verification";
-
-const PREFERENCES_STORAGE_KEY = "buildmedic.preferences.v1";
-const HISTORY_STORAGE_KEY = "buildmedic.history.v1";
-const MAX_HISTORY_ENTRIES = 24;
-
-interface SessionAnalysisRecord {
-  readonly log: string;
-  readonly result: AnalysisResult;
-  readonly fileName?: string;
-}
 
 function normalizePath(pathname: string): string {
   if (pathname.length > 1 && pathname.endsWith("/")) {
@@ -84,96 +74,8 @@ function useCurrentPath(): [string, Navigate] {
   return [path, navigate];
 }
 
-function readPreferences(): UserPreferences {
-  try {
-    const raw = window.localStorage.getItem(PREFERENCES_STORAGE_KEY);
-    if (!raw) return DEFAULT_USER_PREFERENCES;
-    const parsed = JSON.parse(raw) as Partial<UserPreferences>;
-    return {
-      ...DEFAULT_USER_PREFERENCES,
-      ...parsed,
-      theme: parsed.theme === "dark" || parsed.theme === "light" || parsed.theme === "system" ? parsed.theme : DEFAULT_USER_PREFERENCES.theme,
-      defaultInputMode: parsed.defaultInputMode === "file" ? "file" : "paste",
-      displayDensity: parsed.displayDensity === "compact" ? "compact" : "comfortable",
-      reducedMotion: Boolean(parsed.reducedMotion),
-      showLineNumbers: parsed.showLineNumbers !== false,
-      showEvidenceContext: parsed.showEvidenceContext !== false,
-    };
-  } catch {
-    return DEFAULT_USER_PREFERENCES;
-  }
-}
-
-function isHistoryEntry(value: unknown): value is AnalysisHistoryEntry {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Partial<AnalysisHistoryEntry>;
-  return typeof candidate.id === "string"
-    && typeof candidate.analysisId === "string"
-    && typeof candidate.label === "string"
-    && typeof candidate.createdAt === "string"
-    && !Number.isNaN(Date.parse(candidate.createdAt))
-    && (candidate.source === "paste" || candidate.source === "file")
-    && (candidate.status === "complete" || candidate.status === "no-match" || candidate.status === "invalid")
-    && typeof candidate.inputBytes === "number"
-    && Number.isFinite(candidate.inputBytes)
-    && candidate.inputBytes >= 0
-    && typeof candidate.findingCount === "number"
-    && Number.isFinite(candidate.findingCount)
-    && candidate.findingCount >= 0
-    && typeof candidate.summary === "string";
-}
-
-function readHistory(): readonly AnalysisHistoryEntry[] {
-  try {
-    const raw = window.localStorage.getItem(HISTORY_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isHistoryEntry).slice(0, MAX_HISTORY_ENTRIES);
-  } catch {
-    return [];
-  }
-}
-
-function writeLocalStorage(key: string, value: string): void {
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Preferences and metadata history are optional conveniences. A blocked or
-    // full browser store must never prevent local analysis from working.
-  }
-}
-
 function emptyAnalysis(): AnalysisResult {
   return analyzeLog("");
-}
-
-function makeHistoryEntry(
-  result: AnalysisResult,
-  source: AnalysisSource,
-  fileName?: string,
-): AnalysisHistoryEntry {
-  const findingCount = result.status === "complete" ? result.findings.length : 0;
-  const label = fileName || (source === "file" ? "Uploaded build log" : "Pasted build log");
-  const summary = result.status === "complete"
-    ? `${findingCount} ${findingCount === 1 ? "finding" : "findings"} from local deterministic rules.`
-    : result.status === "no-match"
-      ? "No supported diagnostic matched this log."
-      : result.error.message;
-  const topFindingId = result.status === "complete" ? result.findings[0]?.id : undefined;
-
-  return {
-    id: `history-${result.id}`,
-    analysisId: result.id,
-    label: label.slice(0, 120),
-    createdAt: result.analyzedAt,
-    source,
-    status: result.status,
-    inputBytes: result.input.byteCount,
-    findingCount,
-    summary: summary.slice(0, 240),
-    ...(topFindingId ? { topFindingId } : {}),
-  };
 }
 
 function resolveColorScheme(theme: ThemeMode): "dark" | "light" {
@@ -208,19 +110,25 @@ function usePageTitle(path: string) {
 
 export function App() {
   const [path, navigate] = useCurrentPath();
-  const [preferences, setPreferences] = useState<UserPreferences>(readPreferences);
+  const [preferences, setPreferences] = useState<UserPreferences>(() => readPreferences(browserStorage()));
   const [currentLog, setCurrentLog] = useState("");
   const [currentFileName, setCurrentFileName] = useState<string | undefined>();
   const [analysis, setAnalysis] = useState<AnalysisResult>(emptyAnalysis);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [history, setHistory] = useState<readonly AnalysisHistoryEntry[]>(readHistory);
-  const [sessionAnalyses, setSessionAnalyses] = useState<Record<string, SessionAnalysisRecord>>({});
+  const [history, setHistory] = useState<readonly AnalysisHistoryEntry[]>(() => readHistory(browserStorage()));
+  const sessionAnalyses = useRef(new SessionAnalysisCache());
+  const [activeRunId, setActiveRunId] = useState<string | undefined>();
   const [verification, setVerification] = useState<VerificationResult | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [verificationInputs, setVerificationInputs] = useState<{ baseline: string; rerun: string } | undefined>();
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const analysisTimer = useRef<number | null>(null);
-  const verificationTimer = useRef<number | null>(null);
+  const analysisTask = useRef<{ client: LocalTaskClient; controller: AbortController } | null>(null);
+  const verificationTask = useRef<{ client: LocalTaskClient; controller: AbortController } | null>(null);
+  const analysisRevision = useRef(0);
+  const verificationRevision = useRef(0);
+  const notificationTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const isWorkspace = path === "/app" || path.startsWith("/app/");
   usePageTitle(path);
 
@@ -229,133 +137,186 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedScheme;
     document.documentElement.dataset.motion = preferences.reducedMotion ? "reduced" : "full";
-    writeLocalStorage(PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+    document.documentElement.dataset.density = preferences.displayDensity;
+    writePreferences(browserStorage(), preferences);
   }, [preferences, resolvedScheme]);
 
   useEffect(() => {
-    writeLocalStorage(HISTORY_STORAGE_KEY, JSON.stringify(history));
+    writeHistory(browserStorage(), history);
   }, [history]);
 
   useEffect(() => () => {
-    if (analysisTimer.current !== null) window.clearTimeout(analysisTimer.current);
-    if (verificationTimer.current !== null) window.clearTimeout(verificationTimer.current);
+    analysisRevision.current += 1;
+    verificationRevision.current += 1;
+    analysisTask.current?.client.dispose();
+    verificationTask.current?.client.dispose();
+    sessionAnalyses.current.clear();
+    clearTimeout(notificationTimer.current);
   }, []);
 
   const notify = (message: string) => {
+    clearTimeout(notificationTimer.current);
     setToastMessage(message);
-    window.setTimeout(() => setToastMessage(null), 3600);
+    notificationTimer.current = setTimeout(() => setToastMessage(null), 3600);
+  };
+
+  const invalidateVerification = () => {
+    verificationRevision.current += 1;
+    verificationTask.current?.controller.abort();
+    verificationTask.current?.client.dispose();
+    verificationTask.current = null;
+    setVerification(null);
+    setVerificationError(null);
+    setIsVerifying(false);
+  };
+
+  const cancelAnalysis = () => {
+    analysisRevision.current += 1;
+    analysisTask.current?.controller.abort();
+    analysisTask.current?.client.dispose();
+    analysisTask.current = null;
+    setIsAnalyzing(false);
+    setAnalysisError("Analysis canceled. Your input is still available to edit or retry.");
+  };
+
+  const editInput = (text: string, source: "paste" | "file" = "paste", fileName?: string) => {
+    analysisRevision.current += 1;
+    analysisTask.current?.client.dispose();
+    analysisTask.current = null;
+    setIsAnalyzing(false);
+    setCurrentLog(text);
+    setCurrentFileName(source === "file" ? fileName : undefined);
+    setAnalysis(emptyAnalysis());
+    setActiveRunId(undefined);
+    setAnalysisError(null);
+    invalidateVerification();
+    setVerificationInputs({ baseline: text, rerun: "" });
   };
 
   const openDemo = () => {
-    setCurrentLog(DEMO_NODE_BUILD_LOG.text);
-    setCurrentFileName(DEMO_NODE_BUILD_LOG.fileName);
-    setAnalysis(emptyAnalysis());
-    setAnalysisError(null);
+    editInput(DEMO_NODE_BUILD_LOG.text, "paste");
     navigate("/app/new-analysis");
   };
 
-  const handleAnalyze = (text: string, source: "paste" | "file" = "paste", fileName?: string) => {
-    if (analysisTimer.current !== null) window.clearTimeout(analysisTimer.current);
+  const handleAnalyze = async (text: string, source: "paste" | "file" = "paste", fileName?: string) => {
+    analysisTask.current?.client.dispose();
+    const revision = ++analysisRevision.current;
+    const task = { client: new LocalTaskClient(), controller: new AbortController() };
+    analysisTask.current = task;
     setCurrentLog(text);
     setCurrentFileName(fileName);
     setAnalysisError(null);
     setIsAnalyzing(true);
-    setVerification(null);
-    setIsVerifying(false);
-
-    analysisTimer.current = window.setTimeout(() => {
-      analysisTimer.current = null;
-      try {
-        const result = analyzeLog({ text, source, fileName }, {
-          timestampFactory: () => new Date().toISOString(),
-        });
-        const entry = makeHistoryEntry(result, source, fileName);
-        setAnalysis(result);
-        setHistory((current) => [entry, ...current.filter((item) => item.analysisId !== result.id)].slice(0, MAX_HISTORY_ENTRIES));
-        setSessionAnalyses((current) => ({ ...current, [result.id]: { log: text, result, fileName } }));
-        setVerification(null);
-        setIsAnalyzing(false);
-        notify(result.status === "complete"
-          ? `Analysis complete: ${result.findings.length} ${result.findings.length === 1 ? "finding" : "findings"}.`
-          : result.status === "no-match"
-            ? "Analysis complete: no supported diagnostic matched this log."
-            : result.error.message);
-        navigate("/app/analysis");
-      } catch {
-        setIsAnalyzing(false);
-        setAnalysisError("The local analyzer could not complete. Your input is still available; try again.");
-        notify("The local analyzer could not complete. Try again.");
-      }
-    }, 0);
+    setAnalysis(emptyAnalysis());
+    setActiveRunId(undefined);
+    invalidateVerification();
+    setVerificationInputs({ baseline: text, rerun: "" });
+    try {
+      const result = await task.client.request("analyze", { text, source, ...(fileName ? { fileName: fileName.slice(0, 255) } : {}) }, { signal: task.controller.signal });
+      if (analysisRevision.current !== revision) return;
+      const entry = makeHistoryEntry(result, source);
+      setAnalysis(result);
+      setActiveRunId(entry.analysisId);
+      setHistory((current) => [entry, ...current].slice(0, MAX_HISTORY_ENTRIES));
+      if (result.status !== "invalid") sessionAnalyses.current.put(entry.analysisId, { log: text, result, fileName }, result.input.byteCount);
+      setVerification(null);
+      setIsAnalyzing(false);
+      notify(result.status === "complete"
+        ? `Analysis complete: ${result.findings.length} ${result.findings.length === 1 ? "finding" : "findings"}.`
+        : result.status === "no-match"
+          ? "Analysis complete: no supported diagnostic matched this log."
+          : result.error.message);
+      navigate("/app/analysis");
+    } catch (error) {
+      if (analysisRevision.current !== revision || isLocalTaskAbort(error)) return;
+      setIsAnalyzing(false);
+      setAnalysisError(localTaskMessage(error));
+    } finally {
+      task.client.dispose();
+      if (analysisTask.current === task) analysisTask.current = null;
+    }
   };
 
   const clearActiveSession = () => {
-    if (analysisTimer.current !== null) {
-      window.clearTimeout(analysisTimer.current);
-      analysisTimer.current = null;
-    }
-    if (verificationTimer.current !== null) {
-      window.clearTimeout(verificationTimer.current);
-      verificationTimer.current = null;
-    }
+    analysisRevision.current += 1;
+    analysisTask.current?.client.dispose();
+    analysisTask.current = null;
+    invalidateVerification();
+    sessionAnalyses.current.clear();
+    setVerificationInputs(undefined);
     setCurrentLog("");
     setCurrentFileName(undefined);
     setAnalysis(emptyAnalysis());
+    setActiveRunId(undefined);
     setAnalysisError(null);
     setVerification(null);
     setIsAnalyzing(false);
     setIsVerifying(false);
   };
 
-  const handleCompareVerification = (baseline: string, rerun: string) => {
-    if (verificationTimer.current !== null) window.clearTimeout(verificationTimer.current);
+  const handleCompareVerification = async (baseline: string, rerun: string) => {
+    if (analysisTask.current) cancelAnalysis();
+    invalidateVerification();
+    setVerificationInputs({ baseline, rerun });
+    const revision = ++verificationRevision.current;
+    const task = { client: new LocalTaskClient(), controller: new AbortController() };
+    verificationTask.current = task;
     setIsVerifying(true);
     setVerification(null);
-    verificationTimer.current = window.setTimeout(() => {
-      verificationTimer.current = null;
-      try {
-        const baselineResult = analyzeLog({ text: baseline, source: "paste" }, { timestampFactory: () => new Date().toISOString() });
-        const rerunResult = analyzeLog({ text: rerun, source: "paste" }, { timestampFactory: () => new Date().toISOString() });
-        const comparison = compareAnalysisResults(baselineResult, rerunResult);
-        setVerification(comparison);
-        setIsVerifying(false);
-        notify(comparison.status === "compared"
-          ? `Comparison ready: ${comparison.outcome}.`
-          : comparison.status === "no-match"
-            ? "Comparison is uncertain because one side has no supported diagnosis."
-            : comparison.error.message);
-      } catch {
-        setIsVerifying(false);
-        notify("The local comparison could not complete. Try again.");
-      }
-    }, 0);
+    try {
+      const comparison = await task.client.request("compare", { baseline, rerun }, { signal: task.controller.signal });
+      if (verificationRevision.current !== revision) return;
+      setVerification(comparison);
+      setIsVerifying(false);
+      notify(comparison.status === "compared"
+        ? `Comparison ready: ${comparison.outcome}.`
+        : comparison.status === "no-match"
+          ? "Comparison is uncertain because one side has no supported diagnosis."
+          : comparison.error.message);
+    } catch (error) {
+      if (verificationRevision.current !== revision || isLocalTaskAbort(error)) return;
+      setIsVerifying(false);
+      setVerificationError(localTaskMessage(error));
+    } finally {
+      task.client.dispose();
+      if (verificationTask.current === task) verificationTask.current = null;
+    }
+  };
+
+  const cancelVerification = () => {
+    invalidateVerification();
+    setVerificationError("Comparison canceled. Both inputs are still available to edit or retry.");
   };
 
   const clearHistory = () => {
     setHistory([]);
-    try {
-      window.localStorage.removeItem(HISTORY_STORAGE_KEY);
-    } catch {
-      // A blocked store is already empty from the application's perspective.
-    }
-    notify("Local analysis history metadata cleared.");
+    clearActiveSession();
+    clearStoredHistory(browserStorage());
+    notify("Local history and cached session logs cleared.");
   };
 
   const openHistory = (analysisId: string) => {
-    const record = sessionAnalyses[analysisId];
+    const record = sessionAnalyses.current.get(analysisId);
     if (!record) {
       notify("Only metadata for this analysis is available. Re-add the original log to reopen it.");
       return;
     }
+    analysisRevision.current += 1;
+    analysisTask.current?.client.dispose();
+    analysisTask.current = null;
+    setIsAnalyzing(false);
     setCurrentLog(record.log);
     setCurrentFileName(record.fileName);
     setAnalysis(record.result);
+    setActiveRunId(analysisId);
     setAnalysisError(null);
+    invalidateVerification();
+    setVerificationInputs({ baseline: record.log, rerun: "" });
     navigate("/app/analysis");
   };
 
   const patchPreferences = (patch: Partial<UserPreferences>) => {
-    setPreferences((current) => ({ ...current, ...patch }));
+    setPreferences((current) => whitelistPreferences({ ...current, ...patch }));
   };
 
   const setTheme = (theme: ThemeMode) => patchPreferences({ theme });
@@ -364,6 +325,7 @@ export function App() {
   const publicProps: PublicPageProps = { onNavigate: navigate, onNotify: notify, onOpenDemo: openDemo };
   const workspaceProps: WorkspacePageProps = {
     analysis,
+    activeRunId,
     analysisError,
     history,
     isAnalyzing,
@@ -372,7 +334,11 @@ export function App() {
     currentFileName,
     onAnalyze: handleAnalyze,
     onClearActive: clearActiveSession,
+    onCancelAnalysis: cancelAnalysis,
+    onEditInput: editInput,
     onCompareVerification: handleCompareVerification,
+    onCancelVerification: cancelVerification,
+    onVerificationInputChange: (baseline, rerun) => { invalidateVerification(); setVerificationInputs({ baseline, rerun }); },
     onClearHistory: clearHistory,
     onOpenHistory: openHistory,
     onNavigate: navigate,
@@ -381,6 +347,8 @@ export function App() {
     onSetTheme: setTheme,
     preferences,
     verification,
+    verificationError,
+    verificationInputs,
     theme: preferences.theme,
   };
 

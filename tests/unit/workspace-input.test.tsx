@@ -108,7 +108,7 @@ describe("live workspace frontend flow", () => {
     render(<AnalysisPage {...makeProps({ analysis: result, currentLog: DIAGNOSTIC_LOG })} />);
 
     expect(screen.getByText(/typescript\/compiler-diagnostic/i)).toBeInTheDocument();
-    expect(screen.getByText("buildmedic-rules-1")).toBeInTheDocument();
+    expect(screen.getByText(result.ruleCatalogVersion)).toBeInTheDocument();
     expect(screen.getAllByText(/confidence/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/TS2322/).length).toBeGreaterThan(0);
 
@@ -167,12 +167,12 @@ describe("live workspace frontend flow", () => {
     expect(screen.getByText(/no executed build outcome was inferred/i)).toBeInTheDocument();
   });
 
-  it("sanitizes the active log and keeps line numbers one-based", () => {
+  it("sanitizes the active log and keeps line numbers one-based", async () => {
     const log = "token=fixture-secret\nerror TS2322\nthird line";
     render(<LogViewerPage {...makeProps({ analysis: analyzeLog(log), currentLog: log, currentFileName: "secret.log" })} />);
 
     expect(screen.queryByText(/fixture-secret/)).not.toBeInTheDocument();
-    expect(screen.getByText("02")).toBeInTheDocument();
+    expect(await screen.findByText("02")).toBeInTheDocument();
     expect(screen.getByText("error TS2322")).toBeInTheDocument();
     expect(document.querySelector(".is-evidence")).not.toBeNull();
   });
@@ -191,6 +191,6 @@ describe("live workspace frontend flow", () => {
     cleanup();
     render(<ReportsPage {...props} />);
     expect(screen.getByText(result.status === "complete" ? result.findings[0]!.title : "Complete")).toBeInTheDocument();
-    expect(screen.getByText(/Rule catalog buildmedic-rules-1/)).toBeInTheDocument();
+    expect(screen.getByText(`Rule catalog ${result.ruleCatalogVersion}`)).toBeInTheDocument();
   });
 });

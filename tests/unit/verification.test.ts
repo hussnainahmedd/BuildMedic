@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { compareAnalysisResults, getFindingKey } from "../../src/verification";
@@ -88,7 +89,7 @@ describe("compareAnalysisResults", () => {
     });
     expect(result.comparisons).toHaveLength(1);
     expect(result.comparisons[0]).toMatchObject({
-      findingKey: "typescript/assignment|legacy:error ts2322:assignment mismatch",
+      findingKey: getFindingKey(baseline),
       state: "resolved",
       baselineFindingId: "baseline-1",
     });
@@ -141,10 +142,10 @@ describe("compareAnalysisResults", () => {
       summary: { resolvedCount: 2, persistentCount: 1, newCount: 1, uncertainCount: 0 },
     });
     expect(result.comparisons.map((comparison) => [comparison.findingKey, comparison.state])).toEqual([
-      ["a-rule|legacy:a signal", "resolved"],
-      ["n-rule|legacy:n signal", "new"],
-      ["p-rule|legacy:p signal", "persistent"],
-      ["z-rule|legacy:z signal", "resolved"],
+      [getFindingKey(baseline.findings[1]!), "resolved"],
+      [getFindingKey(rerun.findings[1]!), "new"],
+      [getFindingKey(baseline.findings[2]!), "persistent"],
+      [getFindingKey(baseline.findings[0]!), "resolved"],
     ]);
   });
 
@@ -177,10 +178,10 @@ describe("compareAnalysisResults", () => {
       makeComplete("after", [rerunFinding]),
     );
 
-    expect(getFindingKey(baselineFinding)).toBe("typescript/ts2322|legacy:error ts2322:assignment mismatch");
+    expect(getFindingKey(baselineFinding)).toMatch(/^typescript\/ts2322\|legacy:[a-f0-9]{64}$/);
     expect(result.summary).toMatchObject({ persistentCount: 1, resolvedCount: 0, newCount: 0, uncertainCount: 0 });
     expect(result.comparisons[0]).toMatchObject({
-      findingKey: "typescript/ts2322|legacy:error ts2322:assignment mismatch",
+      findingKey: getFindingKey(baselineFinding),
       state: "persistent",
       baselineFindingId: "generated-before",
       rerunFindingId: "generated-after",

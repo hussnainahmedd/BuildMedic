@@ -5,7 +5,8 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "jsdom",
-    passWithNoTests: true,
+    // Bound concurrent DOM environments on laptops and clean CI runners.
+    maxWorkers: 2,
     setupFiles: "./tests/setup.ts",
   },
 });

@@ -19,8 +19,8 @@ export const HARD_MAX_LOG_LINES = 200_000;
 export const HARD_MAX_LOG_LINE_LENGTH = 65_536;
 
 /**
- * MIME patterns are intentionally used as an input signal. A filename extension
- * such as `.log` is never sufficient on its own to pass file validation.
+ * MIME patterns are an input signal. Empty browser MIME metadata may use a
+ * narrow extension allowlist; the selected bytes must still pass text validation.
  */
 export const DEFAULT_ACCEPTED_TEXT_MIME_TYPES = [
   "text/*",
@@ -32,6 +32,8 @@ export const DEFAULT_ACCEPTED_TEXT_MIME_TYPES = [
   "application/typescript",
   "application/x-ndjson",
 ] as const;
+
+export const EMPTY_MIME_TEXT_EXTENSIONS = ["log", "txt", "text", "json", "jsonl", "ndjson", "csv", "out"] as const;
 
 export const DEFAULT_VALIDATION_POLICY: ValidationPolicy = {
   warningBytes: DEFAULT_WARNING_BYTES,
@@ -130,7 +132,7 @@ function createSuccess<T>(value: T): ValidationResult<T> {
 }
 
 function hasWarning(byteCount: number, policy: ValidationPolicy): boolean {
-  return byteCount >= policy.warningBytes;
+  return byteCount >= (Number.isFinite(policy.warningBytes) && policy.warningBytes >= 0 ? policy.warningBytes : DEFAULT_WARNING_BYTES);
 }
 
 /**
@@ -148,7 +150,7 @@ export interface TextInputInspection {
 }
 
 function inputLimit(value: number | undefined, fallback: number, ceiling: number): number {
-  return value !== undefined && Number.isFinite(value) && value > 0
+  return value !== undefined && Number.isFinite(value) && value >= 1
     ? Math.min(Math.floor(value), ceiling)
     : fallback;
 }
@@ -282,7 +284,7 @@ export function isTextLikeMimeType(
   mimeType: unknown,
   acceptedMimeTypes: readonly string[] = DEFAULT_ACCEPTED_TEXT_MIME_TYPES,
 ): boolean {
-  if (typeof mimeType !== "string") {
+  if (typeof mimeType !== "string" || mimeType.length > 256 || !Array.isArray(acceptedMimeTypes) || acceptedMimeTypes.length > 64) {
     return false;
   }
 
@@ -292,7 +294,7 @@ export function isTextLikeMimeType(
     return false;
   }
 
-  return acceptedMimeTypes.some((pattern) => matchesMimePattern(normalizedMimeType, pattern));
+  return acceptedMimeTypes.some((pattern) => typeof pattern === "string" && pattern.length <= 256 && matchesMimePattern(normalizedMimeType, pattern));
 }
 
 /**
@@ -307,20 +309,26 @@ export function validateFile(
     return createFailure("file", "required", VALIDATION_MESSAGES.requiredFile);
   }
 
-  if (!Number.isFinite(file.size) || file.size < 0) {
+  if (typeof file !== "object" || Array.isArray(file) || typeof file.size !== "number" || !Number.isSafeInteger(file.size) || file.size < 0 ||
+    (file.name !== undefined && (typeof file.name !== "string" || file.name.length > 1024)) ||
+    (file.type !== undefined && (typeof file.type !== "string" || file.type.length > 256))) {
     return createFailure("file", "unreadable", VALIDATION_MESSAGES.unreadableInput);
   }
 
-  if (file.size > policy.maxBytes) {
+  const maxBytes = inputLimit(policy.maxBytes, DEFAULT_MAX_LOG_BYTES, HARD_MAX_LOG_BYTES);
+  if (file.size > maxBytes) {
     return createFailure(
       "file",
       "too-large",
       VALIDATION_MESSAGES.tooLargeFile,
-      { actualBytes: file.size, limitBytes: policy.maxBytes },
+      { actualBytes: file.size, limitBytes: maxBytes },
     );
   }
 
-  if (!isTextLikeMimeType(file.type, policy.acceptedMimeTypes)) {
+  const extension = typeof file.name === "string" ? /\.([A-Za-z0-9]+)$/.exec(file.name)?.[1]?.toLowerCase() : undefined;
+  const emptyMimeText = typeof file.type === "string" && file.type.trim().length === 0 &&
+    EMPTY_MIME_TEXT_EXTENSIONS.some((allowed) => allowed === extension);
+  if (!emptyMimeText && !isTextLikeMimeType(file.type, policy.acceptedMimeTypes)) {
     return createFailure(
       "file",
       "unsupported-type",
@@ -333,6 +341,7 @@ export function validateFile(
     file,
     byteCount: file.size,
     warning: hasWarning(file.size, policy),
+    ...(emptyMimeText ? { requiresContentValidation: true } : {}),
   });
 }
 

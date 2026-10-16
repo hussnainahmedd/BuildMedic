@@ -22,7 +22,7 @@ const contentTypes = new Map([
 ]);
 
 const securityHeaders = {
-  "Content-Security-Policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
+  "Content-Security-Policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'",
   "Cross-Origin-Opener-Policy": "same-origin",
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
@@ -93,7 +93,9 @@ async function serveFile(request, response, filePath) {
   if (request.method === "HEAD") {
     response.end();
   } else {
-    createReadStream(filePath).pipe(response);
+    const stream = createReadStream(filePath);
+    stream.on("error", () => response.destroy());
+    stream.pipe(response);
   }
   return true;
 }
@@ -109,7 +111,15 @@ const server = createServer(async (request, response) => {
     return;
   }
 
-  const requestUrl = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+  let requestUrl;
+  try {
+    // Never use an untrusted Host header as a URL base. This is a static server,
+    // not a proxy, and malformed requests must not escape the request handler.
+    requestUrl = new URL(request.url, "http://localhost");
+  } catch {
+    sendText(response, 400, "Bad request");
+    return;
+  }
   if (requestUrl.pathname === "/health") {
     sendJson(response, 200, { service: "buildmedic", status: "ok" });
     return;
@@ -126,6 +136,12 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    // Missing scripts/workers/assets must not receive a successful HTML SPA
+    // fallback; otherwise a deployment failure looks like a valid module fetch.
+    if (path.extname(requestUrl.pathname) || requestUrl.pathname.startsWith("/assets/")) {
+      sendText(response, 404, "Not found");
+      return;
+    }
     if (await serveFile(request, response, indexPath)) {
       return;
     }
@@ -141,5 +157,5 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`BuildMedic listening on http://${host}:${port}`);
+  console.log(`BuildMedic listening on http://${host}:${server.address().port}`);
 });

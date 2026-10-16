@@ -4183,6 +4183,41 @@ kbd,
   color: var(--text);
 }
 
+/* Density is an explicit local preference; the existing layout stays intact. */
+:root[data-density="compact"] .log-code-line {
+  min-height: 22px;
+}
+
+:root[data-density="compact"] .evidence-line {
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+:root[data-density="compact"] .finding-summary {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.report-full-text {
+  margin-top: 20px;
+  padding: 20px;
+}
+
+.report-full-text summary {
+  cursor: pointer;
+  color: var(--muted-strong);
+}
+
+.report-full-text pre {
+  max-height: 560px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.7;
+}
+
 .viewer-footer-note {
   flex-wrap: wrap;
   justify-content: space-between;

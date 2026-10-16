@@ -42,6 +42,10 @@ export interface Finding {
   readonly ruleId: string;
   /** Stable, more-specific identity used to consolidate repeated diagnostics. */
   readonly signature?: string;
+  /** Identity was redacted, ambiguous, or shared by indistinguishable occurrences. */
+  readonly identityUncertain?: boolean;
+  /** Multiple cues consolidated into this identity; not a proven count of independent errors. */
+  readonly occurrenceCount?: number;
   readonly category: FindingCategory;
   readonly severity: FindingSeverity;
   readonly confidence: FindingConfidence;

@@ -1,6 +1,6 @@
 import type { AnalysisLimit, Finding, FindingConfidence, FindingSeverity } from "../types";
 
-import { sanitizeEvidenceLine } from "../analyzer/normalize";
+import { sanitizeEvidenceLine, stripAnsiAndControl } from "../analyzer/normalize";
 import { collectDiagnosticCandidates, RULE_CATALOG_VERSION } from "./rules";
 import type { DiagnosticCandidate, DiagnosticRuleContext } from "./types";
 
@@ -63,7 +63,11 @@ function stableHash(value: string): string {
 }
 
 function boundedPositive(value: number, fallback: number, hardMaximum = Number.MAX_SAFE_INTEGER): number {
-  return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), hardMaximum) : fallback;
+  return Number.isFinite(value) && value >= 1 ? Math.min(Math.floor(value), hardMaximum) : fallback;
+}
+
+function boundedContext(value: number): number {
+  return Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), HARD_MAX_CONTEXT_LINES) : 1;
 }
 
 function compareStrings(left: string, right: string): number {
@@ -144,12 +148,21 @@ function collectEvidence(
   contextLines: number,
   maxEvidenceLines: number,
   maxEvidenceLineLength: number,
-): readonly Finding["evidence"][number][] {
+): { readonly evidence: Finding["evidence"]; readonly truncated: boolean; readonly identityRedacted: boolean } {
   const primaryIndexes = [...new Set(group.candidates.map((candidate) => candidate.lineIndex))].sort((left, right) => left - right);
   const primarySet = new Set(primaryIndexes);
   const indexes = new Set<number>(primaryIndexes);
+  const requiredContext = new Set<number>();
+  for (const candidate of group.candidates) {
+    for (const index of candidate.continuationLineIndexes ?? []) {
+      if (index >= 0 && index < input.lines.length) {
+        requiredContext.add(index);
+        indexes.add(index);
+      }
+    }
+  }
   const evidenceLines = input.evidenceLines ?? input.lines;
-  const radius = boundedPositive(contextLines, 1, HARD_MAX_CONTEXT_LINES);
+  const radius = boundedContext(contextLines);
 
   for (const primaryIndex of primaryIndexes) {
     for (let offset = 1; offset <= radius; offset += 1) {
@@ -165,58 +178,63 @@ function collectEvidence(
   }
 
   const sortedIndexes = [...indexes].sort((left, right) => {
-    const leftPrimary = primarySet.has(left) ? 0 : 1;
-    const rightPrimary = primarySet.has(right) ? 0 : 1;
+    const leftPrimary = primarySet.has(left) ? 0 : requiredContext.has(left) ? 1 : 2;
+    const rightPrimary = primarySet.has(right) ? 0 : requiredContext.has(right) ? 1 : 2;
     return leftPrimary - rightPrimary || left - right;
   });
   // Keep primary evidence first (as the UI and verification layer expect),
   // while retaining source order within the primary and context groups.
   const selectedIndexes = sortedIndexes.slice(0, boundedPositive(maxEvidenceLines, 6, HARD_MAX_EVIDENCE_LINES));
 
-  return selectedIndexes.map((lineIndex) => {
+  let truncated = selectedIndexes.length < indexes.size;
+  let identityRedacted = false;
+  const evidence = selectedIndexes.map((lineIndex) => {
     const originalLine = input.lines[lineIndex] ?? "";
     const displayLine = evidenceLines[lineIndex] ?? originalLine;
     const safe = sanitizeEvidenceLine(
       displayLine,
       boundedPositive(maxEvidenceLineLength, 512, HARD_MAX_EVIDENCE_LINE_LENGTH),
     );
+    truncated ||= safe.truncated === true || originalLine.length > maxEvidenceLineLength;
+    if (primarySet.has(lineIndex) || requiredContext.has(lineIndex)) {
+      identityRedacted ||= stripAnsiAndControl(displayLine) !== stripAnsiAndControl(originalLine);
+    }
     return {
       lineNumber: lineIndex + 1,
       text: safe.text,
-      role: primarySet.has(lineIndex) ? "primary" : "context",
+      role: primarySet.has(lineIndex) ? "primary" as const : "context" as const,
       ...(safe.redacted || displayLine !== originalLine ? { redacted: true } : {}),
     };
   });
+  return { evidence, truncated, identityRedacted };
 }
 
 function createFinding(
   group: CandidateGroup,
   input: DiagnosticEngineInput,
   options: DiagnosticEngineOptions,
-): Finding {
+): { readonly finding: Finding; readonly evidenceTruncated: boolean } {
   const first = group.first;
   const seed = `${first.ruleId}|${first.signature}`;
   const id = options.createId?.("finding", seed) ?? `finding-${stableHash(seed)}`;
-  return {
+  const evidence = collectEvidence(group, input, options.contextLines, options.maxEvidenceLines, options.maxEvidenceLineLength);
+  const finding: Finding = {
     id,
     ruleId: first.ruleId,
     signature: first.signature,
+    ...(first.identityUncertain || evidence.identityRedacted || group.candidates.length > 1 ? { identityUncertain: true } : {}),
+    ...(group.candidates.length > 1 ? { occurrenceCount: group.candidates.length } : {}),
     category: first.category,
     severity: first.severity,
     confidence: first.confidence,
     title: first.title,
     explanation: first.explanation,
-    evidence: collectEvidence(
-      group,
-      input,
-      options.contextLines,
-      options.maxEvidenceLines,
-      options.maxEvidenceLineLength,
-    ),
+    evidence: evidence.evidence,
     suggestedActions: first.suggestedActions,
     verificationHint: first.verificationHint,
     ruleCatalogVersion: options.ruleCatalogVersion,
   };
+  return { finding, evidenceTruncated: evidence.truncated };
 }
 
 /** Runs all offline rules and reports bounded-work metadata for the analyzer boundary. */
@@ -227,25 +245,23 @@ export function analyzeDiagnosticsDetailed(
   const maxMatchesPerRule = boundedPositive(options.maxMatchesPerRule ?? 256, 256, HARD_MAX_MATCHES_PER_RULE);
   // Probe one extra candidate per rule so hitting a caller limit is observable
   // without allowing an unbounded detector to run.
-  const probeMaxMatches = Math.min(HARD_MAX_MATCHES_PER_RULE, maxMatchesPerRule + 1);
+  const probeMaxMatches = maxMatchesPerRule + 1;
   const context: DiagnosticRuleContext = {
     lines: input.lines,
     matchingLines: input.matchingLines,
     maxMatchesPerRule: probeMaxMatches,
   };
   const candidates = collectDiagnosticCandidates(context);
-  const cappedRuleIds = [...new Set(candidates
-    .filter((candidate) => candidate.lineIndex >= 0)
-    .map((candidate) => candidate.ruleId))]
-    .filter((ruleId) => {
-      const count = candidates.filter((candidate) => candidate.ruleId === ruleId).length;
-      return count > maxMatchesPerRule;
-    })
-    .sort(compareStrings);
-  const boundedCandidates = cappedRuleIds.length === 0
-    ? candidates
-    : candidates.filter((candidate) => !cappedRuleIds.includes(candidate.ruleId) ||
-      candidates.filter((entry) => entry.ruleId === candidate.ruleId).indexOf(candidate) < maxMatchesPerRule);
+  const counts = new Map<string, number>();
+  const cappedRules = new Set<string>();
+  const boundedCandidates: DiagnosticCandidate[] = [];
+  for (const candidate of candidates) {
+    const count = (counts.get(candidate.ruleId) ?? 0) + 1;
+    counts.set(candidate.ruleId, count);
+    if (count <= maxMatchesPerRule) boundedCandidates.push(candidate);
+    else cappedRules.add(candidate.ruleId);
+  }
+  const cappedRuleIds = [...cappedRules].sort(compareStrings);
   const groups = groupCandidates(boundedCandidates);
   const maxFindings = boundedPositive(options.maxFindings ?? 32, 32, HARD_MAX_FINDINGS);
   const normalizedOptions: DiagnosticEngineOptions = {
@@ -253,19 +269,17 @@ export function analyzeDiagnosticsDetailed(
     maxFindings,
     maxEvidenceLines: boundedPositive(options.maxEvidenceLines ?? 6, 6, HARD_MAX_EVIDENCE_LINES),
     maxEvidenceLineLength: boundedPositive(options.maxEvidenceLineLength ?? 512, 512, HARD_MAX_EVIDENCE_LINE_LENGTH),
-    contextLines: boundedPositive(options.contextLines ?? 1, 1, HARD_MAX_CONTEXT_LINES),
+    contextLines: boundedContext(options.contextLines ?? 1),
     maxMatchesPerRule: context.maxMatchesPerRule,
     createId: options.createId,
   };
 
-  const findings = groups.slice(0, maxFindings).map((group) => createFinding(group, input, normalizedOptions));
+  const created = groups.slice(0, maxFindings).map((group) => createFinding(group, input, normalizedOptions));
+  const findings = created.map((entry) => entry.finding);
   const limitsReached: AnalysisLimit[] = [];
   if (cappedRuleIds.length > 0) limitsReached.push("matches-per-rule");
   if (groups.length > maxFindings) limitsReached.push("findings");
-  const evidenceTruncated = groups.some((group) =>
-    group.candidates.length + (normalizedOptions.contextLines * 2) > normalizedOptions.maxEvidenceLines ||
-    group.candidates.some((candidate) => (input.lines[candidate.lineIndex] ?? "").length > normalizedOptions.maxEvidenceLineLength),
-  );
+  const evidenceTruncated = created.some((entry) => entry.evidenceTruncated);
   if (evidenceTruncated) limitsReached.push("evidence");
   return {
     findings,

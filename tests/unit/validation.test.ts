@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import {
@@ -123,8 +124,8 @@ describe("text file selection", () => {
     }
   });
 
-  it("does not accept a log extension when the MIME type is unknown or binary", () => {
-    for (const type of ["", "application/octet-stream", "application/pdf"]) {
+  it("does not accept a log extension when the MIME type explicitly identifies binary data", () => {
+    for (const type of ["application/octet-stream", "application/pdf"]) {
       const result = validateFile(makeFile({ name: "looks-like-a-log.log", type }), smallPolicy);
 
       expect(result.valid).toBe(false);

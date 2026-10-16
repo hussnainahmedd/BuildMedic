@@ -35,6 +35,7 @@ import {
   type AnalyzeRequest,
 } from "./types";
 import { normalizeLogText, redactSensitiveLog, sanitizeEvidenceLine } from "./normalize";
+import { findBuildCompletion } from "./completion";
 
 const DETERMINISTIC_TIMESTAMP = "1970-01-01T00:00:00.000Z";
 const MAX_FILE_NAME_LENGTH = 160;
@@ -50,7 +51,7 @@ function stableHash(value: string): string {
 }
 
 function positiveLimit(value: number | undefined, fallback: number, hardMaximum = Number.MAX_SAFE_INTEGER): number {
-  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+  if (value === undefined || !Number.isFinite(value) || value < 1) {
     return fallback;
   }
   return Math.min(Math.floor(value), hardMaximum);
@@ -64,6 +65,7 @@ function resolveFileName(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length === 0) {
     return undefined;
   }
+  if (value.length > 4096) return "uploaded-log";
 
   const basename = value.split(/[\\/]/).pop() ?? value;
   const safe = sanitizeEvidenceLine(basename, MAX_FILE_NAME_LENGTH).text;
@@ -92,17 +94,26 @@ function createId(
   seed: string,
   factory: AnalyzeOptions["idFactory"],
 ): string {
-  const injected = factory?.(kind, seed);
-  if (typeof injected === "string" && injected.length > 0) {
-    return injected;
+  const injected = typeof factory === "function" ? factory(kind, seed) : undefined;
+  if (typeof injected === "string" && injected.length > 0 && injected.length <= 256) {
+    return sanitizeEvidenceLine(injected, 256).text;
   }
 
   return `${kind}-${stableHash(seed)}`;
 }
 
 function createTimestamp(factory: AnalyzeOptions["timestampFactory"]): string {
-  const injected = factory?.();
-  return typeof injected === "string" && injected.length > 0 ? injected : DETERMINISTIC_TIMESTAMP;
+  const injected = typeof factory === "function" ? factory() : undefined;
+  return typeof injected === "string" && injected.length > 0 && injected.length <= 128 ? sanitizeEvidenceLine(injected, 128).text : DETERMINISTIC_TIMESTAMP;
+}
+
+function resolveCatalog(options: AnalyzeOptions): string {
+  const value: unknown = options.ruleCatalogVersion ?? options.catalogVersion;
+  return typeof value === "string" && value.length > 0 && value.length <= 128 ? sanitizeEvidenceLine(value, 128).text : RULE_CATALOG_VERSION;
+}
+
+function safeOptions(value: AnalyzeOptions): AnalyzeOptions {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
 }
 
 function createInvalidResult(
@@ -121,23 +132,11 @@ function createInvalidResult(
     id: createId("analysis", seed, options.idFactory),
     analyzedAt: createTimestamp(options.timestampFactory),
     input: createInputSummary(text, source, fileName, counts?.normalizedNewlines ?? text.includes("\r"), counts),
-    ruleCatalogVersion: options.ruleCatalogVersion ?? options.catalogVersion ?? RULE_CATALOG_VERSION,
+    ruleCatalogVersion: resolveCatalog(options),
     status: "invalid",
     findings: [],
     error,
   };
-}
-
-const BUILD_COMPLETION_PATTERN = /(?:\b(?:build|compile|compilation|bundle|bundling|test suite|tests?)\b[^\n]{0,120}\b(?:completed?|succeed(?:ed|s)?|passed|finished)\b|\b(?:completed?|succeed(?:ed|s)?|passed|finished)\b[^\n]{0,120}\b(?:build|compile|compilation|bundle|tests?)\b|\b(?:webpack|vite|tsc)\b[^\n]{0,120}\b(?:compiled|built)\s+successfully\b|\b(?:exit|status|code)\s*[:=]?\s*0\b)/i;
-
-function findBuildCompletion(lines: readonly string[]): { readonly lineNumber: number; readonly text: string } | undefined {
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    if (BUILD_COMPLETION_PATTERN.test(line)) {
-      return { lineNumber: index + 1, text: sanitizeEvidenceLine(line, 512).text };
-    }
-  }
-  return undefined;
 }
 
 function analyzeTextInternal(text: unknown, options: AnalyzeOptions): AnalysisResult {
@@ -174,7 +173,7 @@ function analyzeTextInternal(text: unknown, options: AnalyzeOptions): AnalysisRe
   const normalized = normalizeLogText(validText);
   const evidenceLines = redactSensitiveLog(normalized.text).text.split("\n");
 
-  const ruleCatalogVersion = options.ruleCatalogVersion ?? options.catalogVersion ?? RULE_CATALOG_VERSION;
+  const ruleCatalogVersion = resolveCatalog(options);
   const analysisSeed = `${source}|${normalized.text}`;
   const idFactory = (kind: "finding", seed: string): string => createId(kind, seed, options.idFactory);
   const diagnosticAnalysis = analyzeDiagnosticsDetailed({ ...normalized, evidenceLines }, {
@@ -182,11 +181,13 @@ function analyzeTextInternal(text: unknown, options: AnalyzeOptions): AnalysisRe
     maxFindings: positiveLimit(options.maxFindings, DEFAULT_MAX_FINDINGS, HARD_MAX_FINDINGS),
     maxEvidenceLines: positiveLimit(options.maxEvidenceLines, DEFAULT_MAX_EVIDENCE_LINES, HARD_MAX_EVIDENCE_LINES),
     maxEvidenceLineLength: positiveLimit(options.maxEvidenceLineLength, DEFAULT_MAX_EVIDENCE_LINE_LENGTH, HARD_MAX_EVIDENCE_LINE_LENGTH),
-    contextLines: positiveLimit(options.contextLines, DEFAULT_CONTEXT_LINES, HARD_MAX_CONTEXT_LINES),
+    contextLines: options.contextLines !== undefined && Number.isFinite(options.contextLines) && options.contextLines >= 0
+      ? Math.min(Math.floor(options.contextLines), HARD_MAX_CONTEXT_LINES)
+      : DEFAULT_CONTEXT_LINES,
     maxMatchesPerRule: positiveLimit(options.maxMatchesPerRule, DEFAULT_MAX_MATCHES_PER_RULE, HARD_MAX_MATCHES_PER_RULE),
     createId: idFactory,
   });
-  const completion = findBuildCompletion(normalized.matchingLines);
+  const completion = findBuildCompletion(normalized.lines);
   const base = {
     id: createId("analysis", analysisSeed, options.idFactory),
     analyzedAt: createTimestamp(options.timestampFactory),
@@ -231,6 +232,7 @@ function analyzeTextInternal(text: unknown, options: AnalyzeOptions): AnalysisRe
 
 /** Public browser-safe API for a text value that has passed no or partial validation. */
 export function analyzeText(text: unknown, options: AnalyzeOptions = {}): AnalysisResult {
+  options = safeOptions(options);
   // Accept the existing ValidatedText-shaped value as a convenience, while
   // recomputing all safety metadata instead of trusting caller-supplied bytes.
   if (typeof text === "object" && text !== null && "text" in text) {
@@ -246,6 +248,7 @@ export function analyzeText(text: unknown, options: AnalyzeOptions = {}): Analys
  * found in the log.
  */
 export function analyzeLog(input: AnalyzeRequest | AnalysisRequest | unknown, options: AnalyzeOptions = {}): AnalysisResult {
+  options = safeOptions(options);
   if (typeof input === "string" || input === null || input === undefined) {
     return analyzeTextInternal(input, options);
   }

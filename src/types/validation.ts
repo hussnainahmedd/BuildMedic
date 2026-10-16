@@ -55,6 +55,8 @@ export interface ValidatedFile {
   readonly file: TextFileLike;
   readonly byteCount: number;
   readonly warning: boolean;
+  /** Empty MIME was accepted by extension only; decoded bytes must pass validateLogText/analyzeText. */
+  readonly requiresContentValidation?: boolean;
 }
 
 export interface ValidationSuccess<T> {

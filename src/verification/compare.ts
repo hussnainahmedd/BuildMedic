@@ -11,6 +11,9 @@ import type {
 } from "../types/verification";
 import type { ValidationError, ValidationErrorCode } from "../types/validation";
 import { redactSensitiveText } from "../analyzer/normalize";
+import { diagnosticIdentity, digestIdentity, normalizeMeaningfulDiagnosticText } from "../analyzer/identity";
+import { isExplicitCompletionLine } from "../analyzer/completion";
+import { FINDING_CATEGORIES, FINDING_CONFIDENCES, FINDING_SEVERITIES } from "../types/finding";
 
 /**
  * The comparison engine does not copy complete findings into its result. A
@@ -25,8 +28,12 @@ const MAX_ANALYSIS_ID_LENGTH = 256;
 const MAX_FINDING_ID_LENGTH = 256;
 const MAX_KEY_LENGTH = 512;
 const MAX_TITLE_LENGTH = 512;
-const MAX_SIGNATURE_LENGTH = 1024;
-const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
+const MAX_SIGNATURE_LENGTH = 8192;
+const MAX_FINDINGS_PER_ANALYSIS = 2048;
+const MAX_EVIDENCE_PER_FINDING = 16;
+const MAX_EVIDENCE_TEXT_LENGTH = 4096;
+const MAX_STRUCTURED_TEXT_LENGTH = 8192;
+const MAX_COMPARISON_TEXT_CHARACTERS = 4 * 1024 * 1024;
 
 export interface VerificationCompareOptions {
   /** Maximum number of comparison rows returned. Counts still cover all rows. */
@@ -36,6 +43,8 @@ export interface VerificationCompareOptions {
 interface NormalizedValue {
   readonly value: string;
   readonly truncated: boolean;
+  readonly redacted?: boolean;
+  readonly uncertain?: boolean;
 }
 
 interface Candidate {
@@ -83,32 +92,20 @@ export function getFindingKey(finding: Finding): string {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function compareStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function replaceControlCharacters(value: string): string {
-  let result = "";
-
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    const isControl = code <= 0x08 || code === 0x0b || code === 0x0c || (code >= 0x0e && code <= 0x1f) || code === 0x7f;
-    result += isControl ? " " : value[index];
-  }
-
-  return result;
-}
-
 function normalizeBoundedIdentity(value: unknown): NormalizedValue {
   if (typeof value !== "string") {
     return { value: "", truncated: false };
   }
-
-  const normalized = value.normalize("NFKC").replace(/\\/g, "/").toLowerCase();
-  const compact = replaceControlCharacters(normalized.replace(ANSI_ESCAPE_PATTERN, ""))
+  if (value.length > MAX_KEY_LENGTH) return { value: "", truncated: true };
+  const safe = redactSensitiveText(value);
+  const compact = safe.text.replace(/\\/g, "/").toLowerCase()
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\s*([/:#._-])\s*/g, "$1");
@@ -116,6 +113,7 @@ function normalizeBoundedIdentity(value: unknown): NormalizedValue {
   return {
     value: compact.slice(0, MAX_KEY_LENGTH),
     truncated: compact.length > MAX_KEY_LENGTH,
+    redacted: safe.redacted || /\[REDACTED\b/i.test(compact),
   };
 }
 
@@ -124,13 +122,16 @@ function normalizeDiagnosticText(value: unknown, limit = MAX_SIGNATURE_LENGTH): 
     return { value: "", truncated: false };
   }
 
-  const normalized = replaceControlCharacters(redactSensitiveText(value).text.normalize("NFKC").replace(ANSI_ESCAPE_PATTERN, ""))
+  if (value.length > MAX_STRUCTURED_TEXT_LENGTH) return { value: "", truncated: true };
+  const safe = redactSensitiveText(value);
+  const normalized = safe.text
     .replace(/\s+/g, " ")
     .trim();
 
   return {
     value: normalized.slice(0, limit),
     truncated: normalized.length > limit,
+    redacted: safe.redacted || /\[REDACTED\b/i.test(normalized),
   };
 }
 
@@ -139,28 +140,24 @@ function normalizeDisplayText(value: unknown, limit: number): string {
 }
 
 function normalizeSignatureText(value: unknown): NormalizedValue {
-  const normalized = normalizeDiagnosticText(value);
-  const stable = normalized.value
-    .replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/gi, "")
-    .replace(/((?:[A-Za-z]:)?[^\s|]+):\d+(?::\d+)?(?=\s|$)/g, "$1")
-    .replace(/\b\d{10,13}\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase()
-    .replace(/\s*([/:#._-])\s*/g, "$1");
-  return { value: stable, truncated: normalized.truncated };
+  if (typeof value !== "string") return { value: "", truncated: false };
+  if (value.length > MAX_SIGNATURE_LENGTH) return { value: "", truncated: true };
+  const normalized = normalizeMeaningfulDiagnosticText(value);
+  return { value: normalized.text, truncated: false, redacted: normalized.redacted };
 }
 
 function readEvidenceSignature(finding: Record<string, unknown>): NormalizedValue {
   if (!Array.isArray(finding.evidence)) {
     return { value: "", truncated: false };
   }
+  if (finding.evidence.length > MAX_EVIDENCE_PER_FINDING) return { value: "", truncated: true };
 
   const rawEvidence = finding.evidence
     .filter(isRecord)
     .map((entry) => ({
       primary: entry.role === "primary" ? 0 : 1,
       text: normalizeSignatureText(entry.text),
+      redacted: entry.redacted === true,
     }))
     .filter((entry) => entry.text.value.length > 0);
   const evidence = (rawEvidence.some((entry) => entry.primary === 0) ? rawEvidence.filter((entry) => entry.primary === 0) : rawEvidence)
@@ -170,10 +167,12 @@ function readEvidenceSignature(finding: Record<string, unknown>): NormalizedValu
     return { value: "", truncated: false };
   }
 
-  const joined = evidence.map((entry) => entry.text.value).join(" | ");
+  const joined = JSON.stringify(evidence.map((entry) => entry.text.value));
   return {
-    value: joined.slice(0, MAX_SIGNATURE_LENGTH),
-    truncated: joined.length > MAX_SIGNATURE_LENGTH || evidence.some((entry) => entry.text.truncated),
+    value: digestIdentity(joined),
+    truncated: evidence.some((entry) => entry.text.truncated),
+    redacted: evidence.some((entry) => entry.redacted || entry.text.redacted),
+    uncertain: evidence.length > 1,
   };
 }
 
@@ -182,27 +181,28 @@ function makeCandidate(value: unknown, index: number): Candidate {
   const rawRuleId = finding?.ruleId;
   const normalizedRuleId = normalizeBoundedIdentity(rawRuleId);
   const title = normalizeDisplayText(finding?.title, MAX_TITLE_LENGTH);
-  const evidenceSignature = readEvidenceSignature(finding ?? {});
-  const titleSignature = normalizeSignatureText(finding?.title);
   const rawSignature = finding?.signature;
   const explicitSignatureValue = normalizeSignatureText(rawSignature);
   const hasExplicitSignature = typeof rawSignature === "string" && explicitSignatureValue.value.length > 0;
-  const signatureValue = hasExplicitSignature
-    ? explicitSignatureValue.value
-    : evidenceSignature.value || titleSignature.value;
-  const signature = signatureValue.slice(0, MAX_SIGNATURE_LENGTH);
+  const evidenceSignature = hasExplicitSignature ? { value: "", truncated: false } : readEvidenceSignature(finding ?? {});
+  const titleSignature = hasExplicitSignature || evidenceSignature.value ? { value: "", truncated: false } : normalizeSignatureText(finding?.title);
+  const signature = hasExplicitSignature
+    ? digestIdentity(explicitSignatureValue.value)
+    : evidenceSignature.value || (titleSignature.value ? diagnosticIdentity("title", titleSignature.value).signature : "");
   const signatureWasTruncated =
-    (hasExplicitSignature ? explicitSignatureValue.truncated : evidenceSignature.truncated || (!evidenceSignature.value && titleSignature.truncated)) || signature.length < signatureValue.length;
+    hasExplicitSignature ? explicitSignatureValue.truncated : evidenceSignature.truncated || (!evidenceSignature.value && titleSignature.truncated);
   const explicitRuleId = typeof rawRuleId === "string" && normalizedRuleId.value.length > 0;
-  const legacyFallbackReliable = !hasExplicitSignature && evidenceSignature.value.length > 0 && !evidenceSignature.truncated;
+  const legacyFallbackReliable = !hasExplicitSignature && evidenceSignature.value.length > 0 && !evidenceSignature.truncated && !evidenceSignature.redacted && !evidenceSignature.uncertain;
   const fallbackKey = signature ? `signature:${signature}` : `unknown:${String(index)}`;
   const rawKey = normalizedRuleId.value
     ? `${normalizedRuleId.value}|${hasExplicitSignature ? "sig:" : "legacy:"}${signature || fallbackKey}`
     : fallbackKey;
   const key = rawKey.slice(0, MAX_KEY_LENGTH);
-  const identityReliable = explicitRuleId && !normalizedRuleId.truncated && !signatureWasTruncated && rawKey.length <= MAX_KEY_LENGTH && (hasExplicitSignature || legacyFallbackReliable);
+  const identityReliable = explicitRuleId && !normalizedRuleId.truncated && !normalizedRuleId.redacted && !signatureWasTruncated &&
+    !(hasExplicitSignature && explicitSignatureValue.redacted) && finding?.confidence !== "low" && finding?.identityUncertain !== true &&
+    !(typeof finding?.occurrenceCount === "number" && finding.occurrenceCount > 1) && rawKey.length <= MAX_KEY_LENGTH && (hasExplicitSignature || legacyFallbackReliable);
   const rawId = finding?.id;
-  const id = typeof rawId === "string" && rawId.length > 0 ? rawId.slice(0, MAX_FINDING_ID_LENGTH) : undefined;
+  const id = typeof rawId === "string" && rawId.length > 0 ? normalizeDisplayText(rawId, MAX_FINDING_ID_LENGTH) : undefined;
   const ruleId = normalizedRuleId.value || key;
   const sortKey = [key, signature, title, id ?? "", String(index).padStart(12, "0")].join("\u0000");
 
@@ -325,34 +325,6 @@ function matchCandidates(
       continue;
     }
 
-    if (baselineGroup.length > 1 && rerunGroup.length > 1) {
-      const baselineBySignature = groupCandidates(baselineGroup, (candidate) => candidate.signature);
-      const rerunBySignature = groupCandidates(rerunGroup, (candidate) => candidate.signature);
-
-      for (const signature of sortedGroupKeys(baselineBySignature, rerunBySignature)) {
-        const baselineSignatureGroup = baselineBySignature.get(signature) ?? [];
-        const rerunSignatureGroup = rerunBySignature.get(signature) ?? [];
-
-        if (signature && baselineSignatureGroup.length === 1 && rerunSignatureGroup.length === 1) {
-          const baseline = baselineSignatureGroup[0];
-          const rerun = rerunSignatureGroup[0];
-
-          if (baseline && rerun) {
-            usedBaseline.add(baseline.index);
-            usedRerun.add(rerun.index);
-            markPair(drafts, baseline, rerun, "persistent");
-          }
-        }
-      }
-
-      const remainingBaseline = baselineGroup.filter((candidate) => !usedBaseline.has(candidate.index));
-      const remainingRerun = rerunGroup.filter((candidate) => !usedRerun.has(candidate.index));
-      markUnmatchedGroup(drafts, remainingBaseline, remainingRerun, "uncertain");
-      for (const candidate of remainingBaseline) usedBaseline.add(candidate.index);
-      for (const candidate of remainingRerun) usedRerun.add(candidate.index);
-      continue;
-    }
-
     if (baselineGroup.length > 1 || rerunGroup.length > 1) {
       markUnmatchedGroup(drafts, baselineGroup, rerunGroup, "uncertain");
       for (const candidate of baselineGroup) usedBaseline.add(candidate.index);
@@ -427,8 +399,12 @@ function makeStableHash(value: string): string {
 }
 
 function getAnalysisId(value: unknown, fallback: string): string {
-  if (!isRecord(value) || typeof value.id !== "string" || value.id.length === 0) return fallback;
-  return value.id.slice(0, MAX_ANALYSIS_ID_LENGTH);
+  try {
+    if (!isRecord(value) || typeof value.id !== "string" || value.id.length === 0 || value.id.length > MAX_ANALYSIS_ID_LENGTH) return fallback;
+    return normalizeDisplayText(value.id, MAX_ANALYSIS_ID_LENGTH) || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function getResultBase(baseline: unknown, rerun: unknown) {
@@ -476,12 +452,62 @@ function normalizeAnalysisError(value: unknown, field: "baseline" | "rerun"): Va
   };
 }
 
+function boundedString(value: unknown, maximum: number, allowEmpty = true): value is string {
+  return typeof value === "string" && value.length <= maximum && (allowEmpty || value.length > 0);
+}
+
+function count(value: unknown, allowZero = true): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= (allowZero ? 0 : 1);
+}
+
+function optionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
+}
+
+function validInput(value: unknown): boolean {
+  return isRecord(value) && (value.source === "file" || value.source === "paste") && count(value.byteCount) && count(value.lineCount) &&
+    typeof value.normalizedNewlines === "boolean" && optionalBoolean(value.countsArePartial) &&
+    (value.fileName === undefined || boundedString(value.fileName, 1024));
+}
+
+function validMetadata(value: unknown, lineCount: number): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value) || !optionalBoolean(value.partial) || !optionalBoolean(value.evidenceTruncated)) return false;
+  if (value.limitsReached !== undefined && (!Array.isArray(value.limitsReached) || value.limitsReached.length > 16 ||
+    !value.limitsReached.every((entry) => boundedString(entry, 128, false)))) return false;
+  if (value.cappedRuleIds !== undefined && (!Array.isArray(value.cappedRuleIds) || value.cappedRuleIds.length > 256 ||
+    !value.cappedRuleIds.every((entry) => boundedString(entry, MAX_KEY_LENGTH, false)))) return false;
+  if (value.omittedFindingCount !== undefined && !count(value.omittedFindingCount)) return false;
+  if (value.buildCompletion !== undefined) {
+    const marker = value.buildCompletion;
+    if (!isRecord(marker) || !count(marker.lineNumber, false) || marker.lineNumber > lineCount || !boundedString(marker.text, 512, false)) return false;
+  }
+  return true;
+}
+
+function validFinding(value: unknown): boolean {
+  if (!isRecord(value) || !boundedString(value.id, MAX_FINDING_ID_LENGTH, false) || !boundedString(value.ruleId, MAX_KEY_LENGTH, false) ||
+    !boundedString(value.title, MAX_STRUCTURED_TEXT_LENGTH) || !boundedString(value.ruleCatalogVersion, 256, false) ||
+    !boundedString(value.explanation, MAX_STRUCTURED_TEXT_LENGTH) || !boundedString(value.verificationHint, MAX_STRUCTURED_TEXT_LENGTH) ||
+    !FINDING_CATEGORIES.some((entry) => entry === value.category) || !FINDING_SEVERITIES.some((entry) => entry === value.severity) ||
+    !FINDING_CONFIDENCES.some((entry) => entry === value.confidence) || !optionalBoolean(value.identityUncertain) ||
+    (value.occurrenceCount !== undefined && !count(value.occurrenceCount, false)) ||
+    (value.signature !== undefined && !boundedString(value.signature, MAX_SIGNATURE_LENGTH))) return false;
+  if (!Array.isArray(value.evidence) || value.evidence.length > MAX_EVIDENCE_PER_FINDING || !value.evidence.every((entry) =>
+    isRecord(entry) && count(entry.lineNumber, false) && boundedString(entry.text, MAX_EVIDENCE_TEXT_LENGTH) &&
+    (entry.role === undefined || entry.role === "primary" || entry.role === "context") && optionalBoolean(entry.redacted))) return false;
+  if (!Array.isArray(value.suggestedActions) || value.suggestedActions.length > 32 || !value.suggestedActions.every((entry) =>
+    isRecord(entry) && boundedString(entry.id, MAX_KEY_LENGTH, false) && boundedString(entry.label, MAX_STRUCTURED_TEXT_LENGTH) &&
+    boundedString(entry.description, MAX_STRUCTURED_TEXT_LENGTH) && (entry.verificationCondition === undefined || boundedString(entry.verificationCondition, MAX_STRUCTURED_TEXT_LENGTH)))) return false;
+  return true;
+}
+
 function inspectAnalysis(value: unknown, field: "baseline" | "rerun"): AnalysisInspection {
   if (!isRecord(value)) {
     return { error: createStructuralError(field, "The baseline and rerun analyses must be structured results.") };
   }
 
-  if (typeof value.id !== "string" || value.id.length === 0) {
+  if (!boundedString(value.id, MAX_ANALYSIS_ID_LENGTH, false)) {
     return { error: createStructuralError(field, "The analysis result is missing its id.") };
   }
 
@@ -489,9 +515,27 @@ function inspectAnalysis(value: unknown, field: "baseline" | "rerun"): AnalysisI
     return { error: normalizeAnalysisError(value.error, field) };
   }
 
+  if (!validInput(value.input) || !boundedString(value.analyzedAt, 128, false) || !boundedString(value.ruleCatalogVersion, 256, false)) {
+    return { error: createStructuralError(field, "The analysis result has missing or malformed input or catalog metadata.") };
+  }
+  if (!validMetadata(value.metadata, (value.input as Record<string, unknown>).lineCount as number)) {
+    return { error: createStructuralError(field, "The analysis result has malformed or excessive analysis metadata.") };
+  }
+  if (value.message !== undefined && !boundedString(value.message, MAX_STRUCTURED_TEXT_LENGTH)) {
+    return { error: createStructuralError(field, "The analysis result has an excessive or malformed message.") };
+  }
+
   if (value.status === "complete") {
-    if (!Array.isArray(value.findings)) {
-      return { error: createStructuralError(field, "The complete analysis result is missing its findings.") };
+    if (!Array.isArray(value.findings) || value.findings.length > MAX_FINDINGS_PER_ANALYSIS || !value.findings.every(validFinding)) {
+      return { error: createStructuralError(field, "The complete analysis result has missing, malformed, or excessive findings.") };
+    }
+    let characters = 0;
+    for (const finding of value.findings as readonly Finding[]) {
+      characters += finding.id.length + finding.ruleId.length + finding.title.length + (finding.signature?.length ?? 0);
+      for (const evidence of finding.evidence) characters += evidence.text.length;
+      if (characters > MAX_COMPARISON_TEXT_CHARACTERS) {
+        return { error: createStructuralError(field, "The analysis findings exceed the bounded comparison text budget.") };
+      }
     }
     return { result: value as unknown as AnalysisResult };
   }
@@ -521,7 +565,8 @@ function makeInvalidResult(
 
 function hasCompletionMarker(value: AnalysisResult): boolean {
   const marker = value.metadata?.buildCompletion;
-  return marker !== undefined && Number.isInteger(marker.lineNumber) && marker.lineNumber > 0 && typeof marker.text === "string" && marker.text.length > 0;
+  return marker !== undefined && Number.isInteger(marker.lineNumber) && marker.lineNumber > 0 && marker.lineNumber <= value.input.lineCount &&
+    typeof marker.text === "string" && marker.text.length <= 512 && isExplicitCompletionLine(marker.text);
 }
 
 function makeNoMatchResult(
@@ -621,12 +666,17 @@ function comparisonQuality(baseline: AnalysisResult, rerun: AnalysisResult): { r
   if (baseline.ruleCatalogVersion !== rerun.ruleCatalogVersion) {
     reasons.push("The baseline and rerun use different rule-catalog versions.");
   }
+  if (baseline.ruleCatalogVersion === "buildmedic-rules-1" || rerun.ruleCatalogVersion === "buildmedic-rules-1") {
+    reasons.push("A legacy catalog used lossy diagnostic identities.");
+  }
   const baselineFindingCatalogMismatch = baseline.status === "complete" && baseline.findings.some((finding) => finding.ruleCatalogVersion !== baseline.ruleCatalogVersion);
   const rerunFindingCatalogMismatch = rerun.status === "complete" && rerun.findings.some((finding) => finding.ruleCatalogVersion !== rerun.ruleCatalogVersion);
   if (baselineFindingCatalogMismatch || rerunFindingCatalogMismatch) {
     reasons.push("One or more findings use a different rule-catalog version than their analysis.");
   }
-  if (baseline.metadata?.partial || rerun.metadata?.partial || (baseline.metadata?.limitsReached?.length ?? 0) > 0 || (rerun.metadata?.limitsReached?.length ?? 0) > 0 || baseline.metadata?.evidenceTruncated || rerun.metadata?.evidenceTruncated || baseline.input.countsArePartial || rerun.input.countsArePartial) {
+  if (baseline.metadata?.partial || rerun.metadata?.partial || (baseline.metadata?.limitsReached?.length ?? 0) > 0 || (rerun.metadata?.limitsReached?.length ?? 0) > 0 ||
+    (baseline.metadata?.omittedFindingCount ?? 0) > 0 || (rerun.metadata?.omittedFindingCount ?? 0) > 0 || (baseline.metadata?.cappedRuleIds?.length ?? 0) > 0 ||
+    (rerun.metadata?.cappedRuleIds?.length ?? 0) > 0 || baseline.metadata?.evidenceTruncated || rerun.metadata?.evidenceTruncated || baseline.input.countsArePartial || rerun.input.countsArePartial) {
     reasons.push("One analysis was capped or otherwise partial, so absence of a finding is not exhaustive.");
   }
   return { uncertain: reasons.length > 0, ...(reasons.length > 0 ? { reason: reasons.join(" ") } : {}) };
@@ -637,9 +687,9 @@ function comparisonQuality(baseline: AnalysisResult, rerun: AnalysisResult): { r
  * over generated finding ids or array position; duplicate or incomplete
  * identity is surfaced as `uncertain` rather than guessed.
  */
-export function compareAnalysisResults(
-  baseline: AnalysisResult,
-  rerun: AnalysisResult,
+function compareInspectedResults(
+  baseline: unknown,
+  rerun: unknown,
   options: VerificationCompareOptions = {},
 ): VerificationResult {
   const baselineInspection = inspectAnalysis(baseline, "baseline");
@@ -720,6 +770,20 @@ export function compareAnalysisResults(
   };
 
   return result;
+}
+
+export function compareAnalysisResults(
+  baseline: unknown,
+  rerun: unknown,
+  options: VerificationCompareOptions = {},
+): VerificationResult {
+  try {
+    return compareInspectedResults(baseline, rerun, isRecord(options) ? options : {});
+  } catch {
+    // Structured-clone/JSON inputs are expected. Exotic objects (including
+    // throwing accessors) are also rejected without escaping this boundary.
+    return makeInvalidResult(baseline, rerun, createStructuralError("baseline", "The analysis results could not be read as bounded structured data."));
+  }
 }
 
 /** Alias matching the conceptual analyzer → verification API. */

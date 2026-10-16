@@ -14,6 +14,7 @@ export interface DiagnosticRuleContext {
 export interface DiagnosticCandidate {
   readonly ruleId: string;
   readonly signature: string;
+  readonly identityUncertain?: boolean;
   readonly category: FindingCategory;
   readonly severity: FindingSeverity;
   readonly confidence: FindingConfidence;
@@ -23,6 +24,8 @@ export interface DiagnosticCandidate {
   readonly verificationHint: string;
   /** Zero-based index into DiagnosticRuleContext.lines. */
   readonly lineIndex: number;
+  /** Required continuation lines, kept even when optional context is disabled. */
+  readonly continuationLineIndexes?: readonly number[];
 }
 
 export interface DiagnosticRule {

@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS build
+FROM node:22.22.3-bookworm-slim AS build
 
 WORKDIR /app
 
@@ -8,7 +8,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY . .
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22.22.3-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0

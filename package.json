@@ -12,7 +12,9 @@
     "lint": "eslint .",
     "start": "node server.mjs",
     "typecheck": "tsc -b",
-    "test": "vitest run"
+    "test": "vitest run",
+    "benchmark": "vitest run --config benchmark.config.ts",
+    "smoke": "node tests/production-smoke.mjs"
   },
   "dependencies": {
     "react": "19.3.1",

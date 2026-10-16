@@ -1,9 +1,10 @@
 import type { FindingConfidence, FindingSeverity, SuggestedAction } from "../types";
-import { redactSensitiveText } from "../analyzer/normalize";
+import { diagnosticIdentity, stripLogTimestampPrefix } from "../analyzer/identity";
+import { stripAnsiAndControl } from "../analyzer/normalize";
 
 import type { DiagnosticCandidate, DiagnosticRule, DiagnosticRuleContext } from "./types";
 
-export const RULE_CATALOG_VERSION = "buildmedic-rules-1";
+export const RULE_CATALOG_VERSION = "buildmedic-rules-2";
 
 export const RULE_IDS = {
   typescript: "typescript/compiler-diagnostic",
@@ -20,8 +21,6 @@ export const RULE_IDS = {
 
 const TS_DIAGNOSTIC_PATTERN = /\bTS\d{3,5}\b/i;
 const SOURCE_STATEMENT_PATTERN = /^\s*(?:const|let|var|return|throw|if|else|for|while|function|class|import|export)\b/i;
-const PACKAGE_NAME_PATTERN = /[^A-Za-z0-9@._/:%+~-]/g;
-const SCRIPT_NAME_PATTERN = /[^A-Za-z0-9:_./@-]/g;
 
 const ACTIONS = {
   typescript: [
@@ -106,24 +105,6 @@ const ACTIONS = {
   ],
 } as const satisfies Record<string, readonly SuggestedAction[]>;
 
-function safePackageName(value: string | undefined): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const safe = redactSensitiveText(value).text.replace(PACKAGE_NAME_PATTERN, "").slice(0, 96);
-  return safe.length > 0 ? safe : undefined;
-}
-
-function safeScriptName(value: string | undefined): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const safe = redactSensitiveText(value).text.replace(SCRIPT_NAME_PATTERN, "").slice(0, 80);
-  return safe.length > 0 ? safe : undefined;
-}
-
 function isSourceStatement(line: string): boolean {
   return SOURCE_STATEMENT_PATTERN.test(line);
 }
@@ -136,37 +117,42 @@ function boundedNearbyText(context: DiagnosticRuleContext, lineIndex: number, ra
   return context.matchingLines.slice(lineIndex, Math.min(context.matchingLines.length, lineIndex + radius + 1)).join(" ").slice(0, 1200);
 }
 
-function safeDiagnosticIdentity(value: string): string {
-  return redactSensitiveText(value)
-    .text
-    .replace(/\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/gi, "")
-    .replace(/\b(?:at\s+)?(?:[A-Za-z]:)?[^\s:|]+:\d+(?::\d+)?\b/gi, "")
-    .replace(/\b\d{10,13}\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 240);
+function diagnosticWithDetails(context: DiagnosticRuleContext, lineIndex: number, detail: RegExp): Pick<DiagnosticCandidate, "signature" | "continuationLineIndexes"> {
+  let signature = context.lines[lineIndex] ?? context.matchingLines[lineIndex];
+  const continuationLineIndexes: number[] = [];
+  for (let offset = 1; offset <= 3; offset += 1) {
+    const index = lineIndex + offset;
+    const line = context.matchingLines[index];
+    if (line === undefined || !detail.test(line)) break;
+    signature += `\n${context.lines[index] ?? line}`;
+    continuationLineIndexes.push(index);
+  }
+  return { signature, continuationLineIndexes };
 }
 
 function sourceFileBeforeDiagnostic(line: string, codeIndex: number): string | undefined {
   const prefix = line.slice(0, codeIndex);
   const match = prefix.match(/(?:^|\s)((?:[A-Za-z]:)?[^\s:]+)\s*:\d+(?::\d+)?\s*(?:-\s*)?(?:error|warning)?\s*$/i)
     ?? prefix.match(/(?:^|\s)((?:[A-Za-z]:)?[^\s(]+)\(\d+(?:,\d+)?\)\s*:\s*(?:error|warning)?\s*$/i);
-  return match === null ? undefined : redactSensitiveText(match[1] ?? "").text.replace(/\\/g, "/").toLowerCase();
+  return match === null ? undefined : (match[1] ?? "").replace(/\\/g, "/");
 }
 
-function typeScriptSignature(line: string, code: string | undefined, codeIndex: number | undefined): string {
+function typeScriptSignature(rawLine: string, code: string | undefined): string {
+  const line = stripLogTimestampPrefix(rawLine);
+  const codeIndex = code === undefined ? undefined : line.match(TS_DIAGNOSTIC_PATTERN)?.index;
   const source = codeIndex === undefined ? undefined : sourceFileBeforeDiagnostic(line, codeIndex);
   const afterCode = codeIndex === undefined || code === undefined ? "" : line.slice(codeIndex + code.length).replace(/^\s*[-:]\s*/, "");
-  const message = safeDiagnosticIdentity(afterCode || line.replace(/\bTS\d{3,5}\b/i, ""));
+  const message = afterCode || line.replace(/\bTS\d{3,5}\b/i, "");
   const codePart = code ?? "compiler-diagnostic";
-  return `typescript:${codePart.toLowerCase()}:${source ?? "unknown"}:${message || "diagnostic"}`.slice(0, 512);
+  return JSON.stringify([codePart, source ?? "unknown", message || "diagnostic"]);
 }
 
 function createCandidate(
   values: Omit<DiagnosticCandidate, "lineIndex">,
   lineIndex: number,
 ): DiagnosticCandidate {
-  return { ...values, lineIndex };
+  const identity = diagnosticIdentity(values.ruleId, values.signature);
+  return { ...values, ...identity, identityUncertain: values.identityUncertain || identity.identityUncertain, lineIndex };
 }
 
 function collect(
@@ -211,11 +197,11 @@ function typeScriptRule(context: DiagnosticRuleContext): readonly DiagnosticCand
     }
 
     const severity: FindingSeverity = /\bwarning\b/i.test(line) ? "warning" : "error";
-    const locatedCodeIndex = code === undefined ? -1 : (codeMatch?.index ?? -1);
+    const identityLine = stripAnsiAndControl(context.lines[lineIndex] ?? line);
     return createCandidate(
       {
         ruleId: RULE_IDS.typescript,
-        signature: typeScriptSignature(line, code, locatedCodeIndex < 0 ? undefined : locatedCodeIndex),
+        signature: typeScriptSignature(identityLine, code),
         category: "typescript",
         severity,
         confidence: code === undefined ? "medium" : "high",
@@ -233,38 +219,47 @@ function typeScriptRule(context: DiagnosticRuleContext): readonly DiagnosticCand
 
 function missingModuleRule(context: DiagnosticRuleContext): readonly DiagnosticCandidate[] {
   return collect(context, (line, lineIndex) => {
-    const nearby = boundedNearbyText(context, lineIndex);
-    const moduleMatch = nearby.match(/(?:cannot|can't)\s+find\s+(?:module|package|dependency)\s+["']([^"']{1,160})["']/i)
-      ?? nearby.match(/(?:can't|cannot)\s+resolve\s+["']([^"']{1,160})["']/i)
-      ?? nearby.match(/cannot\s+find\s+type\s+definition\s+file\s+for\s+["']([^"']{1,160})["']/i)
-      ?? nearby.match(/could\s+not\s+find\s+(?:a\s+)?declaration\s+file\s+for\s+module\s+["']([^"']{1,160})["']/i)
-      ?? nearby.match(/(?:cannot|can't)\s+find\s+(?:module|package|dependency)\s*[-:]?\s*([@A-Za-z0-9._/:%+~-]{1,160})/i);
+    // A candidate must have its own diagnostic cue. Forward text can only
+    // complete that cue; it must never turn preceding context into a match.
     const moduleError = /\b(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND)\b/i.test(line);
-    const resolutionPhrase = /\b(?:cannot|can't|could not)\s+(?:find|resolve)\s+(?:module|package|dependency)\b/i.test(nearby);
-    const lineResolutionPhrase = /\b(?:cannot|can't|could not)\s+(?:find|resolve)\s+(?:module|package|dependency)\b/i.test(line);
+    const resolutionPhrase = /\b(?:cannot|can't|could not)\s+(?:find\s+(?:module|package|dependency|type\s+definition\s+file\s+for|(?:a\s+)?declaration\s+file\s+for\s+module)|resolve(?:\s+["']|\s+(?:module|package|dependency)\b|\s*$))/i.test(line);
     const missingDeclaration = /\bmissing:\s+[^,\s]{1,160}(?:@[^,\s]+)?\s*,\s*required by\b/i.test(line);
     const missingVersion = /\b(?:ERR_PNPM_NO_MATCHING_VERSION|YN0035)\b/i.test(line)
-      || /no matching (?:version|package) found for\s+([^\s,]{1,160})/i.test(nearby);
+      || /no matching (?:version|package) found for\b/i.test(line);
 
-    if ((moduleMatch === null && !moduleError && (!resolutionPhrase || !lineResolutionPhrase) && !missingDeclaration && !missingVersion) || isSourceStatement(line)) {
+    if ((!moduleError && !resolutionPhrase && !missingDeclaration && !missingVersion) || isSourceStatement(line)) {
       return undefined;
     }
 
-    const versionPackage = nearby.match(/no matching (?:version|package) found for\s+([^\s,]{1,160})/i)?.[1];
-    const packageName = safePackageName(moduleMatch?.[1] ?? versionPackage);
-    const signature = packageName === undefined ? "dependencies:missing-module" : `dependencies:missing-module:${packageName.toLowerCase()}`;
-    const confidence: FindingConfidence = moduleMatch !== null || moduleError ? "high" : "medium";
+    let diagnosticText = context.lines[lineIndex] ?? line;
+    const continuationLineIndexes: number[] = [];
+    // Only explicitly incomplete diagnostics may consume a bounded quoted
+    // target (or a following resolution line after a diagnostic code).
+    if (/(?:\b(?:module|package|dependency|for|resolve)|\b(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|ERR_PNPM_NO_MATCHING_VERSION|YN0035))\s*[:-]?\s*$/i.test(line)) {
+      for (let offset = 1; offset <= 3; offset += 1) {
+        const nextIndex = lineIndex + offset;
+        const next = context.matchingLines[nextIndex];
+        if (next === undefined || next.length === 0) break;
+        if (!/^["'][^"']+["'](?:[.,:]|$)/.test(next) &&
+          !(moduleError && /^(?:Error:\s*)?(?:Cannot|Can't) find (?:module|package) ["']/i.test(next)) &&
+          !(missingVersion && /^no matching (?:version|package) found for\b/i.test(next))) break;
+        diagnosticText += `\n${context.lines[nextIndex] ?? next}`;
+        continuationLineIndexes.push(nextIndex);
+        break;
+      }
+    }
+    const hasTarget = /["'][^"']+["']|no matching (?:version|package) found for\s+\S+/i.test(diagnosticText);
+    const confidence: FindingConfidence = hasTarget || moduleError ? "high" : "medium";
     return createCandidate(
       {
         ruleId: RULE_IDS.missingModule,
-        signature,
+        signature: diagnosticText,
+        continuationLineIndexes,
         category: "dependencies",
         severity: "error",
         confidence,
-        title: packageName === undefined ? "A required module cannot be resolved" : `The required module ${packageName} cannot be resolved`,
-        explanation: packageName === undefined
-          ? "The build cannot resolve a required module or dependency from the current install state."
-          : `The build cannot resolve ${packageName} from the current dependency or module-resolution state.`,
+        title: "A required module cannot be resolved",
+        explanation: "The build cannot resolve a required module or dependency from the current install state.",
         suggestedActions: ACTIONS.missingModule,
         verificationHint: "Run the same Node.js build again and confirm the missing-module diagnostic is absent.",
       },
@@ -288,7 +283,7 @@ function dependencyConflictRule(context: DiagnosticRuleContext): readonly Diagno
     return createCandidate(
       {
         ruleId: RULE_IDS.dependencyConflict,
-        signature: "dependencies:peer-version-conflict",
+        signature: context.lines[lineIndex] ?? line,
         category: "dependencies",
         severity: /\b(?:YN0002|YN0060)\b/i.test(line) ? "warning" : "error",
         confidence: exactCode ? "high" : "medium",
@@ -323,7 +318,7 @@ function lockfileRule(context: DiagnosticRuleContext): readonly DiagnosticCandid
     return createCandidate(
       {
         ruleId: RULE_IDS.lockfile,
-        signature: "lockfile:manifest-mismatch",
+        signature: context.lines[lineIndex] ?? line,
         category: "lockfile",
         severity: "error",
         confidence: exactCode || npmCiMismatch || lockMismatch ? "high" : "medium",
@@ -345,7 +340,6 @@ function missingScriptRule(context: DiagnosticRuleContext): readonly DiagnosticC
     const missingScript = line.match(/missing\s+script:\s*["']?([^"'\s,]{1,80})["']?/i);
     const yarnMissingScript = line.match(/\berror\s+command\s+["']([^"']{1,80})["']\s+not\s+found/i);
     const packageManagerNoScript = /\bERR_PNPM_NO_SCRIPT\b/i.test(line);
-    const scriptName = safeScriptName(missingScript?.[1] ?? yarnMissingScript?.[1]);
 
     if (missingScript === null && yarnMissingScript === null && !packageManagerNoScript) {
       return undefined;
@@ -354,14 +348,12 @@ function missingScriptRule(context: DiagnosticRuleContext): readonly DiagnosticC
     return createCandidate(
       {
         ruleId: RULE_IDS.missingScript,
-        signature: `package-script:missing:${(scriptName ?? "unknown").toLowerCase()}`,
+        signature: context.lines[lineIndex] ?? line,
         category: "package-script",
         severity: "error",
         confidence: packageManagerNoScript || missingScript !== null || yarnMissingScript !== null ? "high" : "medium",
-        title: scriptName === undefined ? "The requested package script is missing" : `The package script ${scriptName} is missing`,
-        explanation: scriptName === undefined
-          ? "The package manager could not find the script requested by the build."
-          : `The package manager could not find the declared script ${scriptName}.`,
+        title: "The requested package script is missing",
+        explanation: "The package manager could not find the script requested by the build.",
         suggestedActions: ACTIONS.missingScript,
         verificationHint: "Run the same package script again and confirm it is found and starts successfully.",
       },
@@ -380,18 +372,15 @@ function missingCliRule(context: DiagnosticRuleContext): readonly DiagnosticCand
     if (commandMissing === null || /(?:npm|pnpm|yarn)\s+(?:error|warn)\b/i.test(line) || /\berror\s+command\b/i.test(line)) {
       return undefined;
     }
-    const command = safeScriptName(commandMissing[1]);
     return createCandidate(
       {
         ruleId: RULE_IDS.missingCli,
-        signature: `tooling:missing-cli:${(command ?? "unknown").toLowerCase()}`,
+        signature: context.lines[lineIndex] ?? line,
         category: "tooling",
         severity: "error",
         confidence: "high",
-        title: command === undefined ? "A required command-line tool is missing" : `The command-line tool ${command} is missing`,
-        explanation: command === undefined
-          ? "The shell could not find a command required by the build. This is distinct from a missing package script."
-          : `The shell could not find ${command}. Install it or invoke the project-local binary instead of treating it as a missing package script.`,
+        title: "A required command-line tool is missing",
+        explanation: "The shell could not find a command required by the build. This is distinct from a missing package script.",
         suggestedActions: ACTIONS.missingCli,
         verificationHint: "Run the same command again and confirm the command-line tool is found.",
       },
@@ -416,7 +405,7 @@ function filesystemRule(context: DiagnosticRuleContext): readonly DiagnosticCand
     return createCandidate(
       {
         ruleId: RULE_IDS.filesystem,
-        signature: `permissions:filesystem:${code ? "operating-system-error" : phrase ? "access-or-storage" : "missing-path"}`,
+        ...diagnosticWithDetails(context, lineIndex, /^(?:(?:npm|pnpm|yarn)\s+(?:error|ERR!)\s+)?(?:syscall|path|dest|errno)\s*[:=]?\s+\S/i),
         category: "permissions",
         severity: "error",
         confidence: code || phrase ? "high" : "medium",
@@ -450,7 +439,7 @@ function networkRule(context: DiagnosticRuleContext): readonly DiagnosticCandida
     return createCandidate(
       {
         ruleId: RULE_IDS.network,
-        signature: `network:registry:${authCode ? "auth" : notFoundCode ? "not-found" : transportCode ? "transport" : dnsFailure ? "dns" : "registry"}`,
+        ...diagnosticWithDetails(context, lineIndex, /^(?:(?:npm|pnpm|yarn)\s+(?:error|ERR!)\s+)?(?:syscall|hostname|address|port|url|request|fetch|GET|PUT)\s*[:=]?\s+\S/i),
         category: "network",
         severity: "error",
         confidence: transportCode || dnsFailure || registryCode || authCode || notFoundCode ? "high" : "medium",
@@ -491,7 +480,7 @@ function nativeRule(context: DiagnosticRuleContext): readonly DiagnosticCandidat
     return createCandidate(
       {
         ruleId: RULE_IDS.native,
-        signature: `native-module:${ambiguousPrebuilt ? "prebuilt-unavailable" : exact ? "toolchain-error" : "build-failure"}`,
+        signature: context.lines[lineIndex] ?? line,
         category: "native-module",
         severity: ambiguousPrebuilt ? "warning" : "error",
         confidence: ambiguousPrebuilt ? "low" : exact ? "high" : "medium",
@@ -523,7 +512,7 @@ function memoryRule(context: DiagnosticRuleContext): readonly DiagnosticCandidat
     return createCandidate(
       {
         ruleId: RULE_IDS.memory,
-        signature: `memory:resource:${exact ? "out-of-memory" : killed ? "killed-process" : "resource-exhaustion"}`,
+        signature: context.lines[lineIndex] ?? line,
         category: "memory",
         severity: exact ? "critical" : killed ? "warning" : "error",
         confidence: exact ? "high" : killed ? "low" : "medium",

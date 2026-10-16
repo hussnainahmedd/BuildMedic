@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,7 +9,7 @@ import {
   sanitizeEvidenceLine,
   stripAnsiAndControl,
 } from "../../src/analyzer";
-import { RULE_IDS } from "../../src/diagnostics";
+import { RULE_IDS, RULE_CATALOG_VERSION } from "../../src/diagnostics";
 import {
   AMBIGUOUS_AND_SAFE_LOG,
   ANSI_AND_SECRET_LOG,
@@ -110,12 +111,12 @@ describe("browser-safe diagnostic engine", () => {
 
     const typeFindings = result.findings.filter((finding) => finding.ruleId === RULE_IDS.typescript);
     expect(typeFindings).toHaveLength(3);
-    expect(typeFindings.find((finding) => finding.signature?.includes("first occurrence"))?.evidence.filter((line) => line.role === "primary").map((line) => line.lineNumber)).toEqual([
+    expect(typeFindings.find((finding) => finding.evidence.filter((line) => line.role === "primary").length === 2)?.evidence.filter((line) => line.role === "primary").map((line) => line.lineNumber)).toEqual([
       1,
       2,
     ]);
     expect(result.findings.some((finding) => finding.category === "memory")).toBe(true);
-    expect(result.findings.every((finding) => finding.ruleCatalogVersion === "buildmedic-rules-1")).toBe(true);
+    expect(result.findings.every((finding) => finding.ruleCatalogVersion === RULE_CATALOG_VERSION)).toBe(true);
   });
 
   it("does not turn successful, source-like, or merely preparatory output into findings", () => {
